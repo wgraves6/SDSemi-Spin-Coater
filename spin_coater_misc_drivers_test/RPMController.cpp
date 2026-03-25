@@ -6,7 +6,7 @@ RPMController::RPMController() {
 
   // Default gains (safe starting point)
   _kp = 0.035f;
-  _ki = 0.0010f;
+  _ki = 0.0013f;
   _kd = 0.08f;
 
   _integral = 0;

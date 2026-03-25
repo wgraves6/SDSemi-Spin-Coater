@@ -30,12 +30,11 @@ XY160D motor1(6, 7, 5);
 RPMController rpmController;
 
 // ---- RPM Sensor ----
-HallSensorRPM sensor(2, 4);  // pin 2, 4 magnets per rev
+HallSensorRPM sensor(2, 4);
 
-// ---- Combined Input State ----
+// ---- Input State ----
 struct InputState {
   int knobValue;
-  bool knobButton;
   bool buttonA;
   bool buttonB;
   bool buttonC;
@@ -43,10 +42,8 @@ struct InputState {
 
 InputState inputs;
 
-// ---- Motor state ----
+// ---- Motor ----
 bool motorEnabled = false;
-
-bool calibrating = false;
 
 // ---------------- SETUP ----------------
 void setup() {
@@ -55,18 +52,14 @@ void setup() {
 
   Wire1.begin();
 
-  // ---- Init Drivers ----
   knob.begin(Wire1, KNOB_ADDR);
 
   buttons.beginI2C(Wire1, BUTTON_ADDR);
   buttons.setDebounceTime(25);
 
-  // ---- initial guess lookup table ----
   MotorMap_init();
 
-  rpmController.begin(
-    MotorMap_get(),
-    MotorMap_size());
+  rpmController.begin(MotorMap_get(), MotorMap_size());
   rpmController.setGains(0.035f, 0.0010f);
   rpmController.setKd(0.08f);
   rpmController.setRampRate(4);
@@ -74,8 +67,7 @@ void setup() {
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("OLED failed");
-    while (1)
-      ;
+    while (1);
   }
 
   oled.begin();
@@ -83,11 +75,11 @@ void setup() {
   blinker.begin();
   blinker.setNumber(8888);
 
-  // ---- Motor ----
   motor1.Brake();
-
-  // ---- RPM Sensor ----
   sensor.begin();
+
+  // ---- Hook calibrator to motor ----
+  MotorCalibrator_setPWMCallback(applyPWM);
 }
 
 // ---------------- LOOP ----------------
@@ -98,44 +90,28 @@ void loop() {
 
   float rpm = sensor.getRPM();
 
-  // ---- CALIBRATION MODE ----
+  // ---- Calibration has priority ----
   if (MotorCalibrator_isRunning()) {
-
-    calibrating = true;
-
     MotorCalibrator_update(rpm);
-
-    // MotorCalibrator uses applyPWM(), so DO NOT run normal motor control
-
   } else {
-
-    if (calibrating) {
-      // just finished
-      calibrating = false;
-      Serial.println("Calibration finished, returning to normal mode");
-    }
-
-    handleMotor();
+    handleMotor(rpm);
   }
 
-  handleOledDisplay(now);
-  handle4DigitDisplay(now);
-  //handleDebug(now);
+  handleOledDisplay(now, rpm);
+  handle4DigitDisplay(now, rpm);
 }
 
-// ---------------- INPUT PROCESSING ----------------
+// ---------------- INPUT ----------------
 void processInputs() {
   knob.update();
   buttons.update();
 
-  inputs.knobValue = knob.value();  // assume 0–255
-  inputs.knobButton = knob.pressed();
-
+  inputs.knobValue = knob.value();
   inputs.buttonA = buttons.A();
   inputs.buttonB = buttons.B();
   inputs.buttonC = buttons.C();
 
-  // ---- Button A = enable/disable motor ----
+  // ---- Enable / Disable ----
   if (buttons.roseA()) {
     motorEnabled = true;
     Serial.println("Motor ENABLED");
@@ -147,25 +123,24 @@ void processInputs() {
     Serial.println("Motor DISABLED");
   }
 
-  // ---- Button B = start calibration ----
-  if (buttons.roseB()) {
-    calibrating = true;
-    motorEnabled = false;  // force disable normal control
+  // ---- Start calibration (only if idle) ----
+  if (buttons.roseB() && !MotorCalibrator_isRunning()) {
+    motorEnabled = false;
     motor1.Brake();
 
     MotorCalibrator_start();
-
-    Serial.println("Calibration triggered");
+    Serial.println("Calibration START");
   }
 }
 
-// ---------------- MOTOR CONTROL ----------------
-void handleMotor() {
-  if (motorEnabled) {
-    int speed = constrain(inputs.knobValue, 0, 255) * 100;
-    int pwm = rpmController.update(speed, sensor.getRPM());  //*.94 temp fix for rpm overshoot
-    motor1.Forward(pwm);
-  }
+// ---------------- MOTOR ----------------
+void handleMotor(float rpm) {
+  if (!motorEnabled) return;
+
+  int targetRPM = constrain(inputs.knobValue, 0, 255) * 100;
+  int pwm = rpmController.update(targetRPM, rpm);
+
+  motor1.Forward(pwm);
 }
 
 void applyPWM(int pwm) {
@@ -173,52 +148,36 @@ void applyPWM(int pwm) {
 }
 
 // ---------------- OLED ----------------
-void handleOledDisplay(unsigned long now) {
+void handleOledDisplay(unsigned long now, float rpm) {
   static unsigned long last = 0;
-  if (now - last >= 80) {
-    last = now;
+  if (now - last < 80) return;
+  last = now;
 
-    if (MotorCalibrator_isRunning()) {
-
-      oled.setText(0, "CALIBRATING...");
-      oled.setText(1, "RPM: %.0f", sensor.getRPM());
-      oled.setText(2, "PWM sweep active");
-      oled.setText(3, "Wait...");
-
-    } else {
-
-      oled.setText(0, "RPM: %.1f", sensor.getRPM());
-      oled.setText(1, "Speed: %d", inputs.knobValue);
-      oled.setText(2, motorEnabled ? "RUNNING" : "STOPPED");
-      oled.setText(3, calibrating ? "DONE" : "");
-    }
-
-    oled.render();
+  if (MotorCalibrator_isRunning()) {
+    oled.setText(0, "CALIBRATING");
+    oled.setText(1, "RPM: %.0f", rpm);
+    oled.setText(2, "%d%%", MotorCalibrator_progress());
+    oled.setText(3, "Please wait");
+  } else if (MotorCalibrator_isDone()) {
+    oled.setText(0, "CAL COMPLETE");
+    oled.setText(1, "RPM: %.0f", rpm);
+    oled.setText(2, "Press B to rerun");
+    oled.setText(3, "");
+  } else {
+    oled.setText(0, "RPM");
+    oled.setText(1, "Act: %.0f", rpm);
+    oled.setText(2, "Targ: %d", inputs.knobValue*100);
+    oled.setText(3, motorEnabled ? "RUNNING" : "STOPPED");
   }
+
+  oled.render();
 }
 
-// ---------------- 4-DIGIT DISPLAY ----------------
-void handle4DigitDisplay(unsigned long now) {
+// ---------------- 4-DIGIT ----------------
+void handle4DigitDisplay(unsigned long now, float rpm) {
   static unsigned long last = 0;
-  if (now - last >= 80) {
-    last = now;
+  if (now - last < 80) return;
+  last = now;
 
-    blinker.setNumber((int)sensor.getRPM());
-  }
-}
-
-// ---------------- DEBUG ----------------
-void handleDebug(unsigned long now) {
-  static unsigned long last = 0;
-  if (now - last >= 200) {
-    last = now;
-
-    Serial.print("Knob: ");
-    Serial.print(inputs.knobValue);
-    Serial.print(" | RPM: ");
-    Serial.print(sensor.getRPM());
-    Serial.print(" | Enabled: ");
-    Serial.print(motorEnabled);
-    Serial.println();
-  }
+  blinker.setNumber((int)rpm);
 }

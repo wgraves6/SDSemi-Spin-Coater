@@ -4,13 +4,35 @@
 #include <Arduino.h>
 #include "MotorMap.h"
 
-// Starts the calibration sweep
+// ---- Calibration State ----
+enum CalState {
+  CAL_IDLE,
+  CAL_SETTLING,
+  CAL_SAMPLING,
+  CAL_DONE
+};
+
+// ---- API ----
+
+// Start calibration
 void MotorCalibrator_start();
 
-// Call repeatedly in loop() with current RPM
+// Update (call every loop)
 void MotorCalibrator_update(float measuredRPM);
 
-// Returns true while calibration is running
+// Status
 bool MotorCalibrator_isRunning();
+bool MotorCalibrator_isDone();
+CalState MotorCalibrator_getState();
+
+// Progress (0–100%)
+int MotorCalibrator_progress();
+
+// Reset to idle
+void MotorCalibrator_reset();
+
+// Inject motor control callback
+typedef void (*PWMCallback)(int);
+void MotorCalibrator_setPWMCallback(PWMCallback cb);
 
 #endif
