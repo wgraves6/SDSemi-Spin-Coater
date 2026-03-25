@@ -25,7 +25,7 @@ TM1637BlinkerDigit blinker(CLK, DIO);
 OLEDLineDisplay oled(display, 4);
 ModulinoKnob knob;
 FlexibleButtons buttons;
-XY160D motor1(7, 6, 5);
+XY160D motor1(6, 7, 5);
 RPMController rpmController;
 
 // ---- RPM Sensor ----
@@ -70,7 +70,6 @@ void setup() {
   rpmController.setRampRate(4);           // smooth PWM changes
   rpmController.setDeadband(25);          // reduce jitter
   rpmController.setOutputLimits(0, 255);
-  rpmController.setCorrectiveScalar(.94);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("OLED failed");

@@ -15,7 +15,6 @@ public:
     void setOvershootLimit(float ratio);       // e.g., 1.10 = 10% max overshoot
     void setRampRate(int maxStepPerUpdate);    // max PWM change per loop
     void setDeadband(float rpmDeadband);       // RPM deadband
-    void setCorrectiveScalar(float scalar);    // scale target RPM slightly
 
     int update(float targetRPM, float measuredRPM);
     void reset();
@@ -38,7 +37,6 @@ private:
     float _deadband;
 
     int _lastPWM;
-    float _correctiveScalar;
 
     float interpolatePWM(float rpm);
     int applyRamp(int targetPWM);

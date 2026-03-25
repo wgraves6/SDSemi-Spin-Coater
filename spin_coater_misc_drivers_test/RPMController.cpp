@@ -18,7 +18,6 @@ RPMController::RPMController() {
   _deadband = 20.0f;  // RPM
 
   _lastPWM = 0;
-  _correctiveScalar = 1.0f;  // default = no adjustment
 }
 
 void RPMController::begin(PWMRPMPoint* table, int size) {
@@ -48,11 +47,6 @@ void RPMController::setDeadband(float rpmDeadband) {
   _deadband = rpmDeadband;
 }
 
-void RPMController::setCorrectiveScalar(float scalar) {
-  if (scalar > 0) {
-    _correctiveScalar = scalar;
-  }
-}
 
 void RPMController::reset() {
   _integral = 0;
@@ -61,24 +55,7 @@ void RPMController::reset() {
 
 int RPMController::update(float targetRPM, float measuredRPM) {
 
-  // Base scalar (0..1)
-  float baseScalar = _correctiveScalar;
 
-  if (targetRPM >= 3000.0f) {
-    // 0 → 1 over 3000–4000 RPM
-    float scale = (targetRPM - 3000.0f) / 1000.0f;
-    if (scale > 1.0f) scale = 1.0f;
-
-    // Halfway between baseScalar and baseScalar squared
-    float halfwayScalar = baseScalar + (baseScalar * baseScalar - baseScalar) * 0.5f;
-
-    // Interpolate from baseScalar → halfwayScalar
-    float decreasedScalar = baseScalar + (halfwayScalar - baseScalar) * scale;
-
-    targetRPM *= decreasedScalar;
-  } else {
-    targetRPM *= baseScalar;
-  }
 
   if (_table == nullptr || _size < 2) return 0;
 
