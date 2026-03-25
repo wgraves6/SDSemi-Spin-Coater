@@ -7,6 +7,7 @@
 #include "HallSensorRPM.h"
 #include "RPMController.h"
 #include "MotorMap.h"
+#include "MotorCalibrator.h"
 
 // ---- Defines ----
 #define CLK 9
@@ -45,6 +46,8 @@ InputState inputs;
 // ---- Motor state ----
 bool motorEnabled = false;
 
+bool calibrating = false;
+
 // ---------------- SETUP ----------------
 void setup() {
   Serial.begin(9600);
@@ -57,19 +60,17 @@ void setup() {
 
   buttons.beginI2C(Wire1, BUTTON_ADDR);
   buttons.setDebounceTime(25);
-  
+
   // ---- initial guess lookup table ----
   MotorMap_init();
 
   rpmController.begin(
-        MotorMap_get(),
-        MotorMap_size()
-    );
-  rpmController.setGains(0.04, 0.0015);
-  rpmController.setOvershootLimit(1.10);  // never exceed +10%
-  rpmController.setRampRate(4);           // smooth PWM changes
-  rpmController.setDeadband(25);          // reduce jitter
-  rpmController.setOutputLimits(0, 255);
+    MotorMap_get(),
+    MotorMap_size());
+  rpmController.setGains(0.035f, 0.0010f);
+  rpmController.setKd(0.08f);
+  rpmController.setRampRate(4);
+  rpmController.setDeadband(15);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("OLED failed");
@@ -95,10 +96,31 @@ void loop() {
 
   processInputs();
 
-  handleMotor();  // NEW: continuous knob control
+  float rpm = sensor.getRPM();
+
+  // ---- CALIBRATION MODE ----
+  if (MotorCalibrator_isRunning()) {
+
+    calibrating = true;
+
+    MotorCalibrator_update(rpm);
+
+    // MotorCalibrator uses applyPWM(), so DO NOT run normal motor control
+
+  } else {
+
+    if (calibrating) {
+      // just finished
+      calibrating = false;
+      Serial.println("Calibration finished, returning to normal mode");
+    }
+
+    handleMotor();
+  }
+
   handleOledDisplay(now);
   handle4DigitDisplay(now);
-  handleDebug(now);
+  //handleDebug(now);
 }
 
 // ---------------- INPUT PROCESSING ----------------
@@ -124,15 +146,30 @@ void processInputs() {
     motor1.Brake();
     Serial.println("Motor DISABLED");
   }
+
+  // ---- Button B = start calibration ----
+  if (buttons.roseB()) {
+    calibrating = true;
+    motorEnabled = false;  // force disable normal control
+    motor1.Brake();
+
+    MotorCalibrator_start();
+
+    Serial.println("Calibration triggered");
+  }
 }
 
 // ---------------- MOTOR CONTROL ----------------
 void handleMotor() {
   if (motorEnabled) {
     int speed = constrain(inputs.knobValue, 0, 255) * 100;
-    int pwm = rpmController.update(speed, sensor.getRPM()); //*.94 temp fix for rpm overshoot
+    int pwm = rpmController.update(speed, sensor.getRPM());  //*.94 temp fix for rpm overshoot
     motor1.Forward(pwm);
   }
+}
+
+void applyPWM(int pwm) {
+  motor1.Forward(pwm);
 }
 
 // ---------------- OLED ----------------
@@ -141,9 +178,21 @@ void handleOledDisplay(unsigned long now) {
   if (now - last >= 80) {
     last = now;
 
-    oled.setText(0, "RPM: %.1f", sensor.getRPM());
-    oled.setText(1, "Speed: %d", inputs.knobValue);
-    oled.setText(2, motorEnabled ? "RUNNING" : "STOPPED");
+    if (MotorCalibrator_isRunning()) {
+
+      oled.setText(0, "CALIBRATING...");
+      oled.setText(1, "RPM: %.0f", sensor.getRPM());
+      oled.setText(2, "PWM sweep active");
+      oled.setText(3, "Wait...");
+
+    } else {
+
+      oled.setText(0, "RPM: %.1f", sensor.getRPM());
+      oled.setText(1, "Speed: %d", inputs.knobValue);
+      oled.setText(2, motorEnabled ? "RUNNING" : "STOPPED");
+      oled.setText(3, calibrating ? "DONE" : "");
+    }
+
     oled.render();
   }
 }

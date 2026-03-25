@@ -4,19 +4,23 @@ RPMController::RPMController() {
   _table = nullptr;
   _size = 0;
 
-  _kp = 0.04f;
-  _ki = 0.0015f;
+  // Default gains (safe starting point)
+  _kp = 0.035f;
+  _ki = 0.0010f;
+  _kd = 0.08f;
 
   _integral = 0;
-  _integralMax = 5000;  // anti-windup clamp
+  _lastError = 0;
+
+  _integralMax = 5000;
 
   _minPWM = 0;
   _maxPWM = 255;
 
+  _deadband = 10.0f;
   _maxOvershootRatio = 1.10f;
-  _maxStep = 5;       // max PWM change per update
-  _deadband = 20.0f;  // RPM
 
+  _maxStep = 4;
   _lastPWM = 0;
 }
 
@@ -30,13 +34,13 @@ void RPMController::setGains(float kp, float ki) {
   _ki = ki;
 }
 
+void RPMController::setKd(float kd) {
+  _kd = kd;
+}
+
 void RPMController::setOutputLimits(int minPWM, int maxPWM) {
   _minPWM = minPWM;
   _maxPWM = maxPWM;
-}
-
-void RPMController::setOvershootLimit(float ratio) {
-  _maxOvershootRatio = ratio;
 }
 
 void RPMController::setRampRate(int maxStepPerUpdate) {
@@ -47,56 +51,75 @@ void RPMController::setDeadband(float rpmDeadband) {
   _deadband = rpmDeadband;
 }
 
+void RPMController::setOvershootLimit(float ratio) {
+  _maxOvershootRatio = ratio;
+}
 
 void RPMController::reset() {
   _integral = 0;
+  _lastError = 0;
   _lastPWM = 0;
 }
 
 int RPMController::update(float targetRPM, float measuredRPM) {
 
-
-
   if (_table == nullptr || _size < 2) return 0;
-
-  // ---- Overshoot ceiling ----
-  float maxAllowedRPM = targetRPM * _maxOvershootRatio;
-
-  // ---- Feedforward ----
-  float ffPWM = interpolatePWM(targetRPM);
 
   // ---- Error ----
   float error = targetRPM - measuredRPM;
 
-  // ---- Deadband (prevents jitter) ----
+  // ---- Feedforward (slightly conservative) ----
+  float ffPWM = interpolatePWM(targetRPM) * 0.90f;
+
+  // ---- Deadband ----
   if (abs(error) < _deadband) error = 0;
 
-  // ---- Asymmetric gains ----
-  float kp_used = (error >= 0) ? _kp : _kp * 2.5f;
+  // ---- Conditional integration ----
+  if (abs(error) < 500) {
+    _integral += error;
+  }
 
-  // ---- Integral handling ----
-  if (error > 0) _integral += error;
-  else _integral *= 0.85f;
-
-  // ---- Anti-windup ----
+  // ---- Anti-windup clamp ----
   if (_integral > _integralMax) _integral = _integralMax;
   if (_integral < -_integralMax) _integral = -_integralMax;
 
-  float fbPWM = (kp_used * error) + (_ki * _integral);
+  // ---- Derivative (rate damping) ----
+  float derivative = error - _lastError;
+  _lastError = error;
+
+  // ---- Asymmetric proportional gain ----
+  float kp_used = (error >= 0) ? _kp : _kp * 2.0f;
+
+  // ---- PID feedback ----
+  float fbPWM = (kp_used * error) + (_ki * _integral) + (_kd * derivative);
+
   float output = ffPWM + fbPWM;
 
-  // ---- Hard overshoot protection ----
-  if (measuredRPM > maxAllowedRPM) output -= (measuredRPM - maxAllowedRPM) * 0.08f;
+  // ---- Strong overshoot braking ----
+  if (measuredRPM > targetRPM) {
+    output -= (measuredRPM - targetRPM) * 0.25f;
+  }
+
+  // ---- Hard overshoot ceiling (safety) ----
+  float maxAllowedRPM = targetRPM * _maxOvershootRatio;
+  if (measuredRPM > maxAllowedRPM) {
+    output -= (measuredRPM - maxAllowedRPM) * 0.3f;
+  }
 
   // ---- Clamp output ----
   if (output > _maxPWM) output = _maxPWM;
   if (output < _minPWM) output = _minPWM;
 
-  // ---- Ramp limiting ----
-  int finalPWM = applyRamp((int)output);
+  // ---- Asymmetric ramp limiting ----
+  int targetPWM = (int)output;
+  int delta = targetPWM - _lastPWM;
 
-  _lastPWM = finalPWM;
-  return finalPWM;
+  if (delta > _maxStep) delta = _maxStep;            // slow ramp up
+  if (delta < -_maxStep * 3) delta = -_maxStep * 3;  // fast ramp down
+
+  _lastPWM += delta;
+
+  return _lastPWM;
 }
 
 float RPMController::interpolatePWM(float rpm) {
@@ -109,17 +132,12 @@ float RPMController::interpolatePWM(float rpm) {
       float rpm2 = _table[i + 1].rpm;
       float pwm1 = _table[i].pwm;
       float pwm2 = _table[i + 1].pwm;
+
       float t = (rpm - rpm1) / (rpm2 - rpm1);
+      t = t * t * (3 - 2 * t);
       return pwm1 + t * (pwm2 - pwm1);
     }
   }
 
   return 0;
-}
-
-int RPMController::applyRamp(int targetPWM) {
-  int delta = targetPWM - _lastPWM;
-  if (delta > _maxStep) delta = _maxStep;
-  if (delta < -_maxStep) delta = -_maxStep;
-  return _lastPWM + delta;
 }

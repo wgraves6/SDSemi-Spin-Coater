@@ -6,40 +6,51 @@
 
 class RPMController {
 public:
-    RPMController();
+  RPMController();
 
-    void begin(PWMRPMPoint* table, int size);
+  void begin(PWMRPMPoint* table, int size);
 
-    void setGains(float kp, float ki);
-    void setOutputLimits(int minPWM, int maxPWM);
-    void setOvershootLimit(float ratio);       // e.g., 1.10 = 10% max overshoot
-    void setRampRate(int maxStepPerUpdate);    // max PWM change per loop
-    void setDeadband(float rpmDeadband);       // RPM deadband
+  void setGains(float kp, float ki);
+  void setKd(float kd);
 
-    int update(float targetRPM, float measuredRPM);
-    void reset();
+  void setOutputLimits(int minPWM, int maxPWM);
+  void setRampRate(int maxStepPerUpdate);
+  void setDeadband(float rpmDeadband);
+  void setOvershootLimit(float ratio);
+
+  void reset();
+
+  int update(float targetRPM, float measuredRPM);
 
 private:
-    PWMRPMPoint* _table;
-    int _size;
+  // Table
+  PWMRPMPoint* _table;
+  int _size;
 
-    float _kp;
-    float _ki;
+  // Gains
+  float _kp;
+  float _ki;
+  float _kd;
 
-    float _integral;
-    float _integralMax;
+  // State
+  float _integral;
+  float _lastError;
 
-    int _minPWM;
-    int _maxPWM;
+  // Limits
+  float _integralMax;
+  int _minPWM;
+  int _maxPWM;
 
-    float _maxOvershootRatio;
-    int _maxStep;
-    float _deadband;
+  // Behavior tuning
+  float _deadband;
+  float _maxOvershootRatio;
 
-    int _lastPWM;
+  // Ramp
+  int _maxStep;
+  int _lastPWM;
 
-    float interpolatePWM(float rpm);
-    int applyRamp(int targetPWM);
+  // Helpers
+  float interpolatePWM(float rpm);
 };
 
 #endif
