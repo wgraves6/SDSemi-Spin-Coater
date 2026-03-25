@@ -69,7 +69,7 @@ int RPMController::update(float targetRPM, float measuredRPM) {
   float error = targetRPM - measuredRPM;
 
   // ---- Feedforward (slightly conservative) ----
-  float ffPWM = interpolatePWM(targetRPM) * 0.90f;
+  float ffPWM = interpolatePWM(targetRPM) * 0.93f;
 
   // ---- Deadband ----
   if (abs(error) < _deadband) error = 0;
