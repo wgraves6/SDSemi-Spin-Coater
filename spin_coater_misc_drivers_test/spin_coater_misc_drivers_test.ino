@@ -6,6 +6,7 @@
 #include "XY160D.h"
 #include "HallSensorRPM.h"
 #include "RPMController.h"
+#include "MotorMap.h"
 
 // ---- Defines ----
 #define CLK 9
@@ -44,63 +45,6 @@ InputState inputs;
 // ---- Motor state ----
 bool motorEnabled = false;
 
-// ---- initial guess lookup table ----
-PWMRPMPoint motorMap[] = {
-  { 0, 0 },
-  { 5, 0 },
-  { 10, 0 },
-  { 15, 0 },
-  { 20, 0 },
-  { 25, 0 },
-
-  { 30, 250 },
-  { 35, 575 },
-  { 40, 800 },
-  { 45, 1100 },
-  { 50, 1350 },
-  { 55, 1550 },
-  { 60, 1750 },
-  { 65, 1950 },
-  { 70, 2100 },
-  { 75, 2200 },
-  { 80, 2350 },
-  { 85, 2450 },
-  { 90, 2550 },
-  { 95, 2650 },
-  { 100, 2750 },
-  { 105, 2850 },
-  { 110, 2950 },
-  { 115, 3000 },
-  { 120, 3100 },
-  { 125, 3150 },
-  { 130, 3200 },
-  { 135, 3250 },
-  { 140, 3300 },
-  { 145, 3350 },
-  { 150, 3400 },
-  { 155, 3450 },
-  { 160, 3450 },
-  { 165, 3450 },
-  { 170, 3500 },
-  { 175, 3550 },
-  { 180, 3550 },
-  { 185, 3550 },
-  { 190, 3600 },
-  { 195, 3600 },
-  { 200, 3650 },
-  { 205, 3650 },
-  { 210, 3650 },
-  { 215, 3700 },
-  { 220, 3700 },
-  { 225, 3700 },
-  { 230, 3700 },
-  { 235, 3700 },
-  { 240, 3750 },
-  { 245, 3750 },
-  { 250, 3750 },
-  { 255, 3850 }
-};
-
 // ---------------- SETUP ----------------
 void setup() {
   Serial.begin(9600);
@@ -113,9 +57,14 @@ void setup() {
 
   buttons.beginI2C(Wire1, BUTTON_ADDR);
   buttons.setDebounceTime(25);
+  
+  // ---- initial guess lookup table ----
+  MotorMap_init();
 
-
-  rpmController.begin(motorMap, sizeof(motorMap) / sizeof(motorMap[0]));
+  rpmController.begin(
+        MotorMap_get(),
+        MotorMap_size()
+    );
   rpmController.setGains(0.04, 0.0015);
   rpmController.setOvershootLimit(1.10);  // never exceed +10%
   rpmController.setRampRate(4);           // smooth PWM changes

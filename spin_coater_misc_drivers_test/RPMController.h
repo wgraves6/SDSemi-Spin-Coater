@@ -2,11 +2,7 @@
 #define RPM_CONTROLLER_H
 
 #include <Arduino.h>
-
-struct PWMRPMPoint {
-    int pwm;
-    float rpm;
-};
+#include "MotorMap.h"
 
 class RPMController {
 public:
