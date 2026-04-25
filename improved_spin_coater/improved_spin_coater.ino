@@ -70,10 +70,18 @@ void applyPWM(int pwm) {
 // Menu tree
 // ================================================================
 
+const MenuItem confirmSpinMenu[] = {
+  MENU_ACTION("Confirm", doStartSpin),
+};
+
+const MenuItem confirmCalMenu[] = {
+  MENU_ACTION("Confirm", doCalibrate),
+};
+
 const MenuItem rootMenu[] = {
-  MENU_ACTION("Edit Profile", doEditProfile),
-  MENU_ACTION("Start Spin",   doStartSpin),
-  MENU_ACTION("Calibrate",    doCalibrate),
+  MENU_SUBMENU("Start Spin", confirmSpinMenu),
+  MENU_ACTION("Edit", doEditProfile),
+  MENU_SUBMENU("Calibrate", confirmCalMenu),
 };
 
 // ================================================================

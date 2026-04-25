@@ -2,11 +2,10 @@
 
 // Default three-step profile
 SpinStep spinProfile[SPIN_PROFILE_MAX_STEPS] = {
-    { 500,  5 },
-    { 2000, 30 },
+    { 500,  30 },
     { 4000, 60 },
 };
-int spinProfileCount = 3;
+int spinProfileCount = 2;
 
 // ----------------------------------------------------------------
 
