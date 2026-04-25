@@ -1,16 +1,9 @@
 #include <Wire.h>
 #include "OLEDLineDisplay.h"
-#include "TM1637BlinkerDigit.h"
 #include "ModulinoKnob.h"
-#include "XY160D.h"
-#include "HallSensorRPM.h"
-#include "RPMController.h"
-#include "MotorMap.h"
-#include "MotorCalibrator.h"
+#include "MenuUI.h"
 
 // ---- Defines ----
-#define CLK 9
-#define DIO 10
 #define KNOB_ADDR 0x3A
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -20,130 +13,116 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1, -1);
 
 // ---- Drivers ----
-TM1637BlinkerDigit blinker(CLK, DIO);
 OLEDLineDisplay oled(display, 4);
 ModulinoKnob knob;
-XY160D motor1(6, 7, 5);
-RPMController rpmController;
+MenuUI menu;
 
-// ---- RPM Sensor ----
-HallSensorRPM sensor(2, 4);
+// ---- Knob tracking ----
+int prevKnobValue = 0;
+bool prevPressed = false;
 
-// ---- Input State ----
-struct InputState {
-  int knobValue;
+// ================================================================
+// Menu actions — replace stub Serial prints with real behaviour
+// ================================================================
+
+// Motor Control
+void doStart() {
+  Serial.println("[Motor] Start spin");
+}
+void doStop() {
+  Serial.println("[Motor] Stop spin");
+}
+void doRPM1000() {
+  Serial.println("[Motor] Set 1000 RPM");
+}
+void doRPM2000() {
+  Serial.println("[Motor] Set 2000 RPM");
+}
+void doRPM3000() {
+  Serial.println("[Motor] Set 3000 RPM");
+}
+
+// Calibration
+void doCalibrate() {
+  Serial.println("[Cal] Run calibration");
+}
+void doResetMap() {
+  Serial.println("[Cal] Reset motor map");
+}
+
+// Settings
+void doRampRate() {
+  Serial.println("[Settings] Ramp rate");
+}
+void doDeadband() {
+  Serial.println("[Settings] Deadband");
+}
+void doResetPID() {
+  Serial.println("[Settings] Reset PID");
+}
+
+// About
+void doAbout() {
+  Serial.println("[About] Spin Coater v1.0");
+}
+
+// ================================================================
+// Menu tree — defined bottom-up so parent arrays can reference children
+// ================================================================
+
+const MenuItem motorMenu[] = {
+  MENU_ACTION("Start Spin", doStart),
+  MENU_ACTION("Stop Spin", doStop),
+  MENU_ACTION("1000 RPM", doRPM1000),
+  MENU_ACTION("2000 RPM", doRPM2000),
+  MENU_ACTION("3000 RPM", doRPM3000),
 };
 
-InputState inputs;
+const MenuItem calMenu[] = {
+  MENU_ACTION("Run Cal", doCalibrate),
+  MENU_ACTION("Reset Map", doResetMap),
+};
 
-// ---- Motor ----
-bool motorEnabled = false;
+const MenuItem settingsMenu[] = {
+  MENU_ACTION("Ramp Rate", doRampRate),
+  MENU_ACTION("Deadband", doDeadband),
+  MENU_ACTION("Reset PID", doResetPID),
+};
 
-// ---------------- SETUP ----------------
+const MenuItem rootMenu[] = {
+  MENU_SUBMENU("Motor Ctrl", motorMenu),
+  MENU_SUBMENU("Calibrate", calMenu),
+  MENU_SUBMENU("Settings", settingsMenu),
+  MENU_ACTION("About", doAbout),
+};
+
+// ================================================================
+
 void setup() {
   Serial.begin(9600);
   delay(1000);
 
   Wire1.begin();
-
   knob.begin(Wire1, KNOB_ADDR);
-
-  MotorMap_init();
-
-  rpmController.begin(MotorMap_get(), MotorMap_size());
-  rpmController.setGains(0.035f, 0.0010f);
-  rpmController.setKd(0.08f);
-  rpmController.setRampRate(4);
-  rpmController.setDeadband(15);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("OLED failed");
-    while (1);
+    while (1)
+      ;
   }
 
   oled.begin();
-
-  blinker.begin();
-  blinker.setNumber(8888);
-
-  motor1.Brake();
-  sensor.begin();
-
-  // ---- Hook calibrator to motor ----
-  MotorCalibrator_setPWMCallback(applyPWM);
+  menu.begin(oled, rootMenu, sizeof(rootMenu) / sizeof(rootMenu[0]));
 }
 
-// ---------------- LOOP ----------------
 void loop() {
-  unsigned long now = millis();
-
-  processInputs();
-
-  float rpm = sensor.getRPM();
-
-  // ---- Calibration has priority ----
-  if (MotorCalibrator_isRunning()) {
-    MotorCalibrator_update(rpm);
-  } else {
-    handleMotor(rpm);
-  }
-
-  handleOledDisplay(now, rpm);
-  handle4DigitDisplay(now, rpm);
-}
-
-// ---------------- INPUT ----------------
-void processInputs() {
   knob.update();
 
-  inputs.knobValue = knob.value();
-}
+  int delta = knob.value() - prevKnobValue;
+  prevKnobValue = knob.value();
 
-// ---------------- MOTOR ----------------
-void handleMotor(float rpm) {
-  if (!motorEnabled) return;
+  bool rosePressed = knob.pressed() && !prevPressed;
+  prevPressed = knob.pressed();
 
-  int targetRPM = constrain(inputs.knobValue, 0, 255) * 100;
-  int pwm = rpmController.update(targetRPM, rpm);
-
-  motor1.Forward(pwm);
-}
-
-void applyPWM(int pwm) {
-  motor1.Forward(pwm);
-}
-
-// ---------------- OLED ----------------
-void handleOledDisplay(unsigned long now, float rpm) {
-  static unsigned long last = 0;
-  if (now - last < 80) return;
-  last = now;
-
-  if (MotorCalibrator_isRunning()) {
-    oled.setText(0, "CALIBRATING");
-    oled.setText(1, "RPM: %.0f", rpm);
-    oled.setText(2, "%d%%", MotorCalibrator_progress());
-    oled.setText(3, "Please wait");
-  } else if (MotorCalibrator_isDone()) {
-    oled.setText(0, "CAL COMPLETE");
-    oled.setText(1, "RPM: %.0f", rpm);
-    oled.setText(2, "Press B to rerun");
-    oled.setText(3, "");
-  } else {
-    oled.setText(0, "RPM");
-    oled.setText(1, "Act: %.0f", rpm);
-    oled.setText(2, "Targ: %d", inputs.knobValue*100);
-    oled.setText(3, motorEnabled ? "RUNNING" : "STOPPED");
-  }
-
-  oled.render();
-}
-
-// ---------------- 4-DIGIT ----------------
-void handle4DigitDisplay(unsigned long now, float rpm) {
-  static unsigned long last = 0;
-  if (now - last < 80) return;
-  last = now;
-
-  blinker.setNumber((int)rpm);
+  menu.update(delta, rosePressed);
 }

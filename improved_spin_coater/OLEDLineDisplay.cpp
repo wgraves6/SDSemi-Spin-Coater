@@ -27,6 +27,11 @@ OLEDLineDisplay::OLEDLineDisplay(Adafruit_SSD1306 &d, int numLines)
         state[i].align = LEFT;
         state[i].dirty = true; // force initial draw
     }
+
+    _listCount = 0;
+    _listOffset = 0;
+    _listSelected = 0;
+    _listDirty = false;
 }
 
 // Initialize display settings (call after display.begin())
@@ -183,4 +188,79 @@ int OLEDLineDisplay::getLineHeight() {
 // Return current text size scaling factor
 int OLEDLineDisplay::getTextSize() {
     return textSize;
+}
+
+// Return number of visible lines
+int OLEDLineDisplay::getVisibleLines() const {
+    return lines;
+}
+
+// Copy items into internal storage
+void OLEDLineDisplay::setList(const char** items, int count) {
+    _listCount = (count > OLED_LIST_MAX_ITEMS) ? OLED_LIST_MAX_ITEMS : count;
+    for (int i = 0; i < _listCount; i++) {
+        strncpy(_listItems[i], items[i], OLED_MAX_CHARS - 1);
+        _listItems[i][OLED_MAX_CHARS - 1] = '\0';
+    }
+    _listDirty = true;
+}
+
+void OLEDLineDisplay::setListSelected(int index) {
+    if (index < 0) index = 0;
+    if (_listCount > 0 && index >= _listCount) index = _listCount - 1;
+    if (_listSelected != index) {
+        _listSelected = index;
+        _listDirty = true;
+    }
+}
+
+void OLEDLineDisplay::setListOffset(int offset) {
+    if (offset < 0) offset = 0;
+    int maxOffset = _listCount - lines;
+    if (maxOffset < 0) maxOffset = 0;
+    if (offset > maxOffset) offset = maxOffset;
+    if (_listOffset != offset) {
+        _listOffset = offset;
+        _listDirty = true;
+    }
+}
+
+int OLEDLineDisplay::getListCount()    const { return _listCount; }
+int OLEDLineDisplay::getListSelected() const { return _listSelected; }
+int OLEDLineDisplay::getListOffset()   const { return _listOffset; }
+
+void OLEDLineDisplay::renderList() {
+    if (!_listDirty) return;
+
+    bool hasScrollbar = (_listCount > lines);
+    int contentWidth = hasScrollbar ? disp.width() - 3 : disp.width();
+
+    disp.clearDisplay();
+    disp.setTextSize(textSize);
+
+    for (int i = 0; i < lines; i++) {
+        int itemIdx = _listOffset + i;
+        if (itemIdx >= _listCount) break;
+
+        int y = i * lineHeight;
+        bool selected = (itemIdx == _listSelected);
+
+        disp.fillRect(0, y, contentWidth, lineHeight,
+                      selected ? SSD1306_WHITE : SSD1306_BLACK);
+        disp.setCursor(1, y);
+        disp.setTextColor(selected ? SSD1306_BLACK : SSD1306_WHITE);
+        disp.print(_listItems[itemIdx]);
+    }
+
+    if (hasScrollbar) {
+        int barH = max(3, lines * disp.height() / _listCount);
+        int barY = (_listCount > lines)
+            ? _listOffset * (disp.height() - barH) / (_listCount - lines)
+            : 0;
+        int barX = disp.width() - 2;
+        disp.fillRect(barX, barY, 2, barH, SSD1306_WHITE);
+    }
+
+    disp.display();
+    _listDirty = false;
 }

@@ -11,6 +11,9 @@
 // Maximum number of characters per line (includes null terminator)
 #define OLED_MAX_CHARS 32
 
+// Maximum number of items in a scrollable list
+#define OLED_LIST_MAX_ITEMS 20
+
 // Text alignment options
 enum TextAlign {
     LEFT,   // left aligned text
@@ -38,6 +41,13 @@ private:
 
     char buffer[OLED_MAX_CHARS]; // temporary buffer for formatted text
     LineState state[OLED_MAX_LINES]; // state for each line
+
+    // ---- List mode state ----
+    char _listItems[OLED_LIST_MAX_ITEMS][OLED_MAX_CHARS];
+    int _listCount;
+    int _listOffset;
+    int _listSelected;
+    bool _listDirty;
 
     // Calculate pixel width of a string based on current text size
     int computeTextWidth(const char* text);
@@ -72,4 +82,26 @@ public:
 
     // Get current text size multiplier
     int getTextSize();
+
+    // Get number of visible lines
+    int getVisibleLines() const;
+
+    // ---- Scrollable list mode ----
+
+    // Load items into the list (copies strings internally)
+    void setList(const char** items, int count);
+
+    // Set which item index is highlighted
+    void setListSelected(int index);
+
+    // Set which item index is at the top of the visible window
+    void setListOffset(int offset);
+
+    // Query list state
+    int getListCount() const;
+    int getListSelected() const;
+    int getListOffset() const;
+
+    // Render the scrollable list (only redraws when dirty)
+    void renderList();
 };
