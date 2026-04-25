@@ -183,7 +183,7 @@ void SpinProfilePage::renderDigitEdit() {
                  _digits[0], _digits[1], _digits[2], _digits[3]);
     } else {
         _oled->setText(0, "Edit Dur");
-        snprintf(valLine, 11, "Dur: %d%d%ds",
+        snprintf(valLine, 11, "Dur:%d%d%ds",
                  _digits[0], _digits[1], _digits[2]);
     }
 
