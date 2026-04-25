@@ -26,6 +26,9 @@ public:
     // Re-render the current menu level (call after returning from a custom page)
     void redraw();
 
+    // Pop back to the root level and redraw
+    void resetToRoot();
+
 private:
     static const int MAX_DEPTH = 5;
 

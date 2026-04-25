@@ -60,6 +60,11 @@ void MenuUI::redraw() {
     rebuildList();
 }
 
+void MenuUI::resetToRoot() {
+    _depth = 0;
+    rebuildList();
+}
+
 void MenuUI::rebuildList() {
     Level& lvl = _stack[_depth];
     const char* labels[OLED_LIST_MAX_ITEMS];

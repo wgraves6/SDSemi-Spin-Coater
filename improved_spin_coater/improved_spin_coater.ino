@@ -220,7 +220,7 @@ void loop() {
       if (!spinRunner.update(rpm)) {
         blinker.setNumber(0);
         appState = APP_MENU;
-        menu.redraw();
+        menu.resetToRoot();
       } else {
         updateOledSpin(rpm);
       }
@@ -231,7 +231,7 @@ void loop() {
       if (!MotorCalibrator_isRunning()) {
         blinker.setNumber(0);
         appState = APP_MENU;
-        menu.redraw();
+        menu.resetToRoot();
       } else {
         updateOledCal();
       }
