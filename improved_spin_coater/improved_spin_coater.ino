@@ -2,7 +2,6 @@
 #include "OLEDLineDisplay.h"
 #include "TM1637BlinkerDigit.h"
 #include "ModulinoKnob.h"
-#include "FlexibleButtons.h"
 #include "XY160D.h"
 #include "HallSensorRPM.h"
 #include "RPMController.h"
@@ -13,7 +12,6 @@
 #define CLK 9
 #define DIO 10
 #define KNOB_ADDR 0x3A
-#define BUTTON_ADDR 0x3E
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_ADDR 0x3D
@@ -25,7 +23,6 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1, -1);
 TM1637BlinkerDigit blinker(CLK, DIO);
 OLEDLineDisplay oled(display, 4);
 ModulinoKnob knob;
-FlexibleButtons buttons;
 XY160D motor1(6, 7, 5);
 RPMController rpmController;
 
@@ -35,9 +32,6 @@ HallSensorRPM sensor(2, 4);
 // ---- Input State ----
 struct InputState {
   int knobValue;
-  bool buttonA;
-  bool buttonB;
-  bool buttonC;
 };
 
 InputState inputs;
@@ -53,9 +47,6 @@ void setup() {
   Wire1.begin();
 
   knob.begin(Wire1, KNOB_ADDR);
-
-  buttons.beginI2C(Wire1, BUTTON_ADDR);
-  buttons.setDebounceTime(25);
 
   MotorMap_init();
 
@@ -104,33 +95,8 @@ void loop() {
 // ---------------- INPUT ----------------
 void processInputs() {
   knob.update();
-  buttons.update();
 
   inputs.knobValue = knob.value();
-  inputs.buttonA = buttons.A();
-  inputs.buttonB = buttons.B();
-  inputs.buttonC = buttons.C();
-
-  // ---- Enable / Disable ----
-  if (buttons.roseA()) {
-    motorEnabled = true;
-    Serial.println("Motor ENABLED");
-  }
-
-  if (buttons.fellA()) {
-    motorEnabled = false;
-    motor1.Brake();
-    Serial.println("Motor DISABLED");
-  }
-
-  // ---- Start calibration (only if idle) ----
-  if (buttons.roseB() && !MotorCalibrator_isRunning()) {
-    motorEnabled = false;
-    motor1.Brake();
-
-    MotorCalibrator_start();
-    Serial.println("Calibration START");
-  }
 }
 
 // ---------------- MOTOR ----------------
