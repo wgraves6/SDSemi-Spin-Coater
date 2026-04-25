@@ -2,8 +2,9 @@
 
 // ----------------------------------------------------------------
 
-void SpinProfilePage::start(OLEDLineDisplay& oled) {
+void SpinProfilePage::start(OLEDLineDisplay& oled, TM1637BlinkerDigit& blinker) {
     _oled    = &oled;
+    _blinker = &blinker;
     _listSel = 0;
     _listOff = 0;
     enterStepList();
@@ -23,6 +24,8 @@ bool SpinProfilePage::update(int delta, bool pressed) {
             _digitPos++;
             if (_digitPos >= _numDigits) {
                 saveDigits();
+                _blinker->clearBlink();
+                _blinker->setNumber(0);
                 _listSel = (_editField == 0) ? 1 : 2; // return focus to edited field
                 _listOff = 0;
                 enterFieldSelect();
@@ -169,32 +172,34 @@ void SpinProfilePage::saveDigits() {
 }
 
 void SpinProfilePage::renderDigitEdit() {
-    // Line 0: field label
-    // Line 1: value with digits shown, e.g. "RPM: 2000"  — digits start at col 5
-    // Line 2: arrow pointing at active digit
-    // Line 3: instruction
-
     char valLine[11];
     char arrowLine[11];
+    int val, blinkPos;
 
     if (_editField == 0) {
         _oled->setText(0, "Edit RPM");
         snprintf(valLine, 11, "RPM:%d%d%d%d",
                  _digits[0], _digits[1], _digits[2], _digits[3]);
+        val      = _digits[0]*1000 + _digits[1]*100 + _digits[2]*10 + _digits[3];
+        blinkPos = _digitPos;
     } else {
         _oled->setText(0, "Edit Dur");
         snprintf(valLine, 11, "Dur:%d%d%ds",
                  _digits[0], _digits[1], _digits[2]);
+        val      = _digits[0]*100 + _digits[1]*10 + _digits[2];
+        blinkPos = _digitPos + 1; // leading zero occupies position 0 on 4-digit display
     }
 
-    // Arrow: "RPM:" / "Dur: " both 4 chars, digits start at col 4
     memset(arrowLine, ' ', 10);
     arrowLine[4 + _digitPos] = '^';
     arrowLine[10] = '\0';
 
     _oled->setText(1, valLine);
     _oled->setText(2, arrowLine);
-    bool isLast = (_digitPos == _numDigits - 1);
-    _oled->setText(3, isLast ? "Btn:save" : "Btn:next");
+    _oled->setText(3, (_digitPos == _numDigits - 1) ? "Btn:save" : "Btn:next");
     _oled->render();
+
+    _blinker->setNumber(val);
+    _blinker->clearBlink();
+    _blinker->startBlink(blinkPos);
 }

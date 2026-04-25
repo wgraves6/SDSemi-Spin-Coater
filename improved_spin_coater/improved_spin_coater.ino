@@ -134,6 +134,8 @@ void updateOledSpin(float rpm) {
   oled.setText(2, "Left:%ds", spinRunner.stepRemainingS());
   oled.setText(3, "RPM:%d", (int)rpm);
   oled.render();
+
+  blinker.setNumber((int)rpm);
 }
 
 void updateOledCal() {
@@ -142,11 +144,14 @@ void updateOledCal() {
   if (now - last < 200) return;
   last = now;
 
+  int pct = MotorCalibrator_progress();
   oled.setText(0, "CALIBRATING");
-  oled.setText(1, "%d%%", MotorCalibrator_progress());
+  oled.setText(1, "%d%%", pct);
   oled.setText(2, "Please wait");
   oled.setText(3, "");
   oled.render();
+
+  blinker.setNumber(pct);
 }
 
 // ================================================================
@@ -162,6 +167,16 @@ void loop() {
   bool rosePressed = knob.pressed() && !prevPressed;
   prevPressed = knob.pressed();
 
+  // Drive blinker animation at 50 ms intervals
+  {
+    static unsigned long lastBlink = 0;
+    unsigned long now = millis();
+    if (now - lastBlink >= 50) {
+      lastBlink = now;
+      blinker.update();
+    }
+  }
+
   switch (appState) {
 
     case APP_MENU:
@@ -169,12 +184,13 @@ void loop() {
 
       if (gDoEditProfile) {
         gDoEditProfile = false;
-        profilePage.start(oled);
+        profilePage.start(oled, blinker);
         appState = APP_EDIT_PROFILE;
 
       } else if (gDoStartSpin) {
         gDoStartSpin = false;
         if (spinProfileCount > 0) {
+          blinker.clearBlink();
           spinRunner.start(motor1, rpmController);
           oled.clear();
           appState = APP_SPIN;
@@ -182,6 +198,7 @@ void loop() {
 
       } else if (gDoCalibrate) {
         gDoCalibrate = false;
+        blinker.clearBlink();
         motor1.Brake();
         rpmController.reset();
         MotorCalibrator_start();
@@ -192,6 +209,8 @@ void loop() {
 
     case APP_EDIT_PROFILE:
       if (profilePage.update(delta, rosePressed)) {
+        blinker.clearBlink();
+        blinker.setNumber(0);
         appState = APP_MENU;
         menu.redraw();
       }
@@ -199,17 +218,18 @@ void loop() {
 
     case APP_SPIN:
       if (!spinRunner.update(rpm)) {
+        blinker.setNumber(0);
         appState = APP_MENU;
         menu.redraw();
       } else {
         updateOledSpin(rpm);
-        blinker.setNumber((int)rpm);
       }
       break;
 
     case APP_CALIBRATE:
       MotorCalibrator_update(rpm);
       if (!MotorCalibrator_isRunning()) {
+        blinker.setNumber(0);
         appState = APP_MENU;
         menu.redraw();
       } else {
