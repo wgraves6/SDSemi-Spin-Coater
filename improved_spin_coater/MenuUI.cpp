@@ -56,6 +56,10 @@ void MenuUI::pop() {
     rebuildList();
 }
 
+void MenuUI::redraw() {
+    rebuildList();
+}
+
 void MenuUI::rebuildList() {
     Level& lvl = _stack[_depth];
     const char* labels[OLED_LIST_MAX_ITEMS];

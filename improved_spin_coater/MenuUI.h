@@ -23,6 +23,9 @@ public:
     // Call each loop with encoder delta and a rising-edge press signal
     void update(int delta, bool pressed);
 
+    // Re-render the current menu level (call after returning from a custom page)
+    void redraw();
+
 private:
     static const int MAX_DEPTH = 5;
 
