@@ -16,12 +16,7 @@ struct PWMRPMPoint {
 void MotorMap_init();                  // load from EEPROM or default
 void MotorMap_save();                  // persist current map
 
-PWMRPMPoint* MotorMap_get();           // pointer to working map
-int MotorMap_size();                   // number of valid points
-
-bool MotorMap_setPoint(int index, int pwm, float rpm);
-
-// Optional utility
-void MotorMap_resetToDefault();
+PWMRPMPoint* MotorMap_get();
+int          MotorMap_size();
 
 #endif

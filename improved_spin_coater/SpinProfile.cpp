@@ -43,8 +43,7 @@ bool SpinRunner::update(float rpm) {
     return true;
 }
 
-bool SpinRunner::isRunning()   const { return _running; }
-int  SpinRunner::currentStep() const { return _step; }
+int SpinRunner::currentStep() const { return _step; }
 
 int SpinRunner::stepRemainingS() const {
     if (!_running || _step >= spinProfileCount) return 0;

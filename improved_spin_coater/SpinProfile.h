@@ -17,12 +17,9 @@ class SpinRunner {
 public:
     void start(XY160D& motor, RPMController& ctrl);
 
-    // Call every loop while running; returns false when finished
-    bool update(float rpm);
-
-    bool isRunning()       const;
-    int  currentStep()     const;
-    int  stepRemainingS()  const;
+    bool update(float rpm);  // returns false when finished
+    int  currentStep()    const;
+    int  stepRemainingS() const;
 
 private:
     bool           _running   = false;

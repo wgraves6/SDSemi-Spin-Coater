@@ -6,8 +6,7 @@ HallSensorRPM::HallSensorRPM(uint8_t pin, uint8_t magnetsPerRev)
   : _pin(pin),
     _magnetsPerRev(magnetsPerRev),
     _lastPulseTime(0),
-    _period(0),
-    currentState(HIGH) {}
+    _period(0) {}
 
 void HallSensorRPM::begin() {
     pinMode(_pin, INPUT_PULLUP);
@@ -25,10 +24,8 @@ void HallSensorRPM::handleInterrupt() {
     // Debounce / ignore pulses that are too close together
     if (now - _lastPulseTime < _minPulseInterval) return;
 
-    _period = now - _lastPulseTime;
+    _period        = now - _lastPulseTime;
     _lastPulseTime = now;
-
-    currentState = LOW;
 }
 
 float HallSensorRPM::getRPM() {
@@ -45,9 +42,3 @@ float HallSensorRPM::getRPM() {
     return (60.0f * 1000000.0f) / (period * _magnetsPerRev);
 }
 
-unsigned long HallSensorRPM::getPeriod() {
-    noInterrupts();
-    unsigned long p = _period;
-    interrupts();
-    return p;
-}

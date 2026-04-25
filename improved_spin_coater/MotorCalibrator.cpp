@@ -2,6 +2,8 @@
 #include "MotorMap.h"
 #include <Arduino.h>
 
+enum CalState { CAL_IDLE, CAL_SETTLING, CAL_SAMPLING, CAL_DONE };
+
 // ---- CONFIG ----
 static const int PWM_START = 30;
 static const int PWM_END   = 255;
@@ -71,20 +73,8 @@ void MotorCalibrator_start() {
   Serial.println("\n=== Calibration START ===");
 }
 
-void MotorCalibrator_reset() {
-  _state = CAL_IDLE;
-}
-
 bool MotorCalibrator_isRunning() {
   return (_state == CAL_SETTLING || _state == CAL_SAMPLING);
-}
-
-bool MotorCalibrator_isDone() {
-  return _state == CAL_DONE;
-}
-
-CalState MotorCalibrator_getState() {
-  return _state;
 }
 
 int MotorCalibrator_progress() {

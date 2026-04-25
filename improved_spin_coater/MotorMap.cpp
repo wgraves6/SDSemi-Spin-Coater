@@ -125,14 +125,3 @@ int MotorMap_size() {
   return mapSize;
 }
 
-bool MotorMap_setPoint(int index, int pwm, float rpm) {
-  if (index < 0 || index >= mapSize) return false;
-
-  mapData[index].pwm = pwm;
-  mapData[index].rpm = rpm;
-  return true;
-}
-
-void MotorMap_resetToDefault() {
-  loadDefault();
-}

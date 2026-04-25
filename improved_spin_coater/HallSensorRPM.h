@@ -10,9 +10,6 @@ public:
     void begin();
 
     float getRPM();
-    unsigned long getPeriod();
-
-    int currentState;
 
     static void isrHandler();
 

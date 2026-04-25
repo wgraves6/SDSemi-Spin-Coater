@@ -1,6 +1,5 @@
 #include "SpinProfilePage.h"
 
-// ----------------------------------------------------------------
 
 void SpinProfilePage::start(OLEDLineDisplay& oled, TM1637BlinkerDigit& blinker) {
     _oled    = &oled;
@@ -10,7 +9,6 @@ void SpinProfilePage::start(OLEDLineDisplay& oled, TM1637BlinkerDigit& blinker) 
     enterStepList();
 }
 
-// ----------------------------------------------------------------
 
 bool SpinProfilePage::update(int delta, bool pressed) {
 
@@ -89,7 +87,6 @@ bool SpinProfilePage::update(int delta, bool pressed) {
     return false;
 }
 
-// ----------------------------------------------------------------
 
 void SpinProfilePage::enterStepList() {
     _state      = STEP_LIST;
