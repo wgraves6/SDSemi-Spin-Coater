@@ -124,25 +124,27 @@ void setup() {
 // ================================================================
 
 void updateOledSpin(float rpm) {
-  static unsigned long last = 0;
+  static unsigned long lastBlinker = 0;
   unsigned long now = millis();
-  if (now - last < 100) return;
-  last = now;
+  if (now - lastBlinker >= 100) {
+    lastBlinker = now;
+    blinker.setNumber((int)rpm);
+  }
 
   oled.setText(0, "SPINNING");
   oled.setText(1, "Step:%d/%d", spinRunner.currentStep() + 1, spinProfileCount);
   oled.setText(2, "Left:%ds", spinRunner.stepRemainingS());
-  oled.setText(3, "RPM:%d", (int)rpm);
+  oled.setText(3, "Tgt:%d", spinProfile[spinRunner.currentStep()].rpm);
   oled.render();
-
-  blinker.setNumber((int)rpm);
 }
 
-void updateOledCal() {
-  static unsigned long last = 0;
+void updateOledCal(float rpm) {
+  static unsigned long lastBlinker = 0;
   unsigned long now = millis();
-  if (now - last < 200) return;
-  last = now;
+  if (now - lastBlinker >= 100) {
+    lastBlinker = now;
+    blinker.setNumber((int)rpm);
+  }
 
   int pct = MotorCalibrator_progress();
   oled.setText(0, "CALIBRATING");
@@ -150,8 +152,6 @@ void updateOledCal() {
   oled.setText(2, "Please wait");
   oled.setText(3, "");
   oled.render();
-
-  blinker.setNumber(pct);
 }
 
 // ================================================================
@@ -233,7 +233,7 @@ void loop() {
         appState = APP_MENU;
         menu.resetToRoot();
       } else {
-        updateOledCal();
+        updateOledCal(rpm);
       }
       break;
   }
