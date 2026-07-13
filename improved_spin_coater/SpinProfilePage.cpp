@@ -1,14 +1,66 @@
 #include "SpinProfilePage.h"
 
+// ---- Phase field layout ----------------------------------------
+//
+//  Phase 0 (Idle):  field 0 = idleSpeed (RPM, 4 dig)
+//                   field 1 = idleTime  (sec, 3 dig)
+//  Phase 1 (Ramp):  field 0 = rampTime  (sec, 3 dig)
+//  Phase 2 (Final): field 0 = finalSpeed (RPM, 4 dig)
+//                   field 1 = finalTime  (sec, 3 dig)
+//
+// ----------------------------------------------------------------
+
+int SpinProfilePage::phaseFieldCount(int phase) {
+    return (phase == PHASE_RAMP) ? 1 : 2;
+}
+
+bool SpinProfilePage::fieldIsRPM(int phase, int field) {
+    if (phase == PHASE_RAMP) return false;  // rampTime is always a time field
+    return (field == 0);                    // first field of idle/final is speed
+}
+
+uint16_t SpinProfilePage::getFieldValue(int phase, int field) {
+    switch (phase) {
+        case PHASE_IDLE:  return (field == 0) ? spinPhase.idleSpeed  : spinPhase.idleTime;
+        case PHASE_RAMP:  return spinPhase.rampTime;
+        case PHASE_FINAL: return (field == 0) ? spinPhase.finalSpeed : spinPhase.finalTime;
+        default:          return 0;
+    }
+}
+
+void SpinProfilePage::setFieldValue(int phase, int field, uint16_t val) {
+    switch (phase) {
+        case PHASE_IDLE:
+            if (field == 0) spinPhase.idleSpeed = val;
+            else            spinPhase.idleTime  = val;
+            break;
+        case PHASE_RAMP:
+            spinPhase.rampTime = val;
+            break;
+        case PHASE_FINAL:
+            if (field == 0) spinPhase.finalSpeed = val;
+            else            spinPhase.finalTime  = val;
+            break;
+    }
+}
+
+void SpinProfilePage::fieldLabel(int phase, int field, char* buf, int bufLen) {
+    if (fieldIsRPM(phase, field)) {
+        snprintf(buf, bufLen, "Speed: %u", (unsigned)getFieldValue(phase, field));
+    } else {
+        snprintf(buf, bufLen, "Time:  %us", (unsigned)getFieldValue(phase, field));
+    }
+}
+
+// ----------------------------------------------------------------
 
 void SpinProfilePage::start(OLEDLineDisplay& oled, TM1637BlinkerDigit& blinker) {
     _oled    = &oled;
     _blinker = &blinker;
     _listSel = 0;
     _listOff = 0;
-    enterStepList();
+    enterPhaseList();
 }
-
 
 bool SpinProfilePage::update(int delta, bool pressed) {
 
@@ -24,9 +76,9 @@ bool SpinProfilePage::update(int delta, bool pressed) {
                 saveDigits();
                 _blinker->clearBlink();
                 _blinker->setNumber(0);
-                _listSel = (_editField == 0) ? 1 : 2; // return focus to edited field
+                _listSel = _editField + 1; // return focus to edited field row
                 _listOff = 0;
-                enterFieldSelect();
+                enterFieldSelect(_editPhase);
             } else {
                 renderDigitEdit();
             }
@@ -34,52 +86,38 @@ bool SpinProfilePage::update(int delta, bool pressed) {
         return false;
     }
 
-    // ---- List modes (STEP_LIST / FIELD_SELECT) ----
+    // ---- List scroll (PHASE_LIST / FIELD_SELECT) ----
     if (delta != 0) {
         _listSel = constrain(_listSel + delta, 0, _labelCount - 1);
         int vis = _oled->getVisibleLines();
-        if (_listSel < _listOff)            _listOff = _listSel;
-        if (_listSel >= _listOff + vis)     _listOff = _listSel - vis + 1;
+        if (_listSel < _listOff)          _listOff = _listSel;
+        if (_listSel >= _listOff + vis)   _listOff = _listSel - vis + 1;
         _oled->setListSelected(_listSel);
         _oled->setListOffset(_listOff);
         _oled->renderList();
     }
 
     if (pressed) {
-        if (_state == STEP_LIST) {
+        if (_state == PHASE_LIST) {
             if (_listSel == 0) {
-                return true; // "< Done" — exit page
-            } else if (_listSel <= spinProfileCount) {
-                _editStep = _listSel - 1;
-                _listSel  = 0;
-                _listOff  = 0;
-                enterFieldSelect();
-            } else if (_listSel == spinProfileCount + 1) {
-                // "+ Add Step"
-                if (spinProfileCount < SPIN_PROFILE_MAX_STEPS) {
-                    spinProfile[spinProfileCount] = { 1000, 10 };
-                    spinProfileCount++;
-                    _listSel = spinProfileCount; // point at new step
-                }
-                enterStepList();
-            } else {
-                // "- Rem Last"
-                if (spinProfileCount > 1) {
-                    spinProfileCount--;
-                    if (_listSel > spinProfileCount) _listSel = spinProfileCount;
-                }
-                enterStepList();
+                return true; // "< Done"
+            } else if (_listSel >= 1 && _listSel <= PHASE_COUNT) {
+                _editPhase = _listSel - 1;
+                _listSel   = 0;
+                _listOff   = 0;
+                enterFieldSelect(_editPhase);
             }
         } else { // FIELD_SELECT
             if (_listSel == 0) {
-                // "< Back" — restore cursor to the step we came from
-                _listSel = _editStep + 1;
+                // "< Back" — restore cursor to the phase we came from
+                _listSel = _editPhase + 1;
                 _listOff = 0;
-                enterStepList();
-            } else if (_listSel == 1) {
-                enterDigitEdit(0); // edit RPM
-            } else if (_listSel == 2) {
-                enterDigitEdit(1); // edit duration
+                enterPhaseList();
+            } else {
+                int fieldIdx = _listSel - 1;
+                if (fieldIdx < phaseFieldCount(_editPhase)) {
+                    enterDigitEdit(_editPhase, fieldIdx);
+                }
             }
         }
     }
@@ -87,20 +125,27 @@ bool SpinProfilePage::update(int delta, bool pressed) {
     return false;
 }
 
+// ----------------------------------------------------------------
 
-void SpinProfilePage::enterStepList() {
-    _state      = STEP_LIST;
+void SpinProfilePage::enterPhaseList() {
+    _state      = PHASE_LIST;
     _labelCount = 0;
 
     strncpy(_labels[_labelCount++], "< Done", OLED_MAX_CHARS - 1);
-    for (int i = 0; i < spinProfileCount; i++) {
-        snprintf(_labels[_labelCount++], OLED_MAX_CHARS,
-                 "%d:%u/%us", i + 1,
-                 (unsigned int)spinProfile[i].rpm,
-                 (unsigned int)spinProfile[i].durationS);
-    }
-    strncpy(_labels[_labelCount++], "+ Add Step", OLED_MAX_CHARS - 1);
-    strncpy(_labels[_labelCount++], "- Rem Last", OLED_MAX_CHARS - 1);
+
+    // Idle
+    snprintf(_labels[_labelCount++], OLED_MAX_CHARS,
+             "Idle:%u/%us",
+             (unsigned)spinPhase.idleSpeed, (unsigned)spinPhase.idleTime);
+
+    // Ramp
+    snprintf(_labels[_labelCount++], OLED_MAX_CHARS,
+             "Ramp:%us", (unsigned)spinPhase.rampTime);
+
+    // Final
+    snprintf(_labels[_labelCount++], OLED_MAX_CHARS,
+             "Final:%u/%us",
+             (unsigned)spinPhase.finalSpeed, (unsigned)spinPhase.finalTime);
 
     for (int i = 0; i < _labelCount; i++) {
         _labels[i][OLED_MAX_CHARS - 1] = '\0';
@@ -113,15 +158,18 @@ void SpinProfilePage::enterStepList() {
     _oled->renderList();
 }
 
-void SpinProfilePage::enterFieldSelect() {
+void SpinProfilePage::enterFieldSelect(int phase) {
     _state      = FIELD_SELECT;
+    _editPhase  = phase;
     _labelCount = 0;
 
-    strncpy(_labels[_labelCount++], "< Back", OLED_MAX_CHARS - 1);
-    snprintf(_labels[_labelCount++], OLED_MAX_CHARS, "RPM: %u",
-             (unsigned int)spinProfile[_editStep].rpm);
-    snprintf(_labels[_labelCount++], OLED_MAX_CHARS, "Dur: %us",
-             (unsigned int)spinProfile[_editStep].durationS);
+    snprintf(_labels[_labelCount++], OLED_MAX_CHARS, "< %s", phaseName(phase));
+
+    int fc = phaseFieldCount(phase);
+    for (int f = 0; f < fc; f++) {
+        fieldLabel(phase, f, _labels[_labelCount], OLED_MAX_CHARS);
+        _labelCount++;
+    }
 
     for (int i = 0; i < _labelCount; i++) {
         _labels[i][OLED_MAX_CHARS - 1] = '\0';
@@ -134,24 +182,26 @@ void SpinProfilePage::enterFieldSelect() {
     _oled->renderList();
 }
 
-void SpinProfilePage::enterDigitEdit(int field) {
-    _state     = DIGIT_EDIT;
-    _editField = field;
-    _digitPos  = 0;
+void SpinProfilePage::enterDigitEdit(int phase, int field) {
+    _state      = DIGIT_EDIT;
+    _editPhase  = phase;
+    _editField  = field;
+    _digitPos   = 0;
+    _fieldIsRPM = fieldIsRPM(phase, field);
 
-    if (field == 0) { // RPM — 4 digits
-        _numDigits = 4;
-        uint16_t v = spinProfile[_editStep].rpm;
-        _digits[0] = (v / 1000) % 10;
-        _digits[1] = (v /  100) % 10;
-        _digits[2] = (v /   10) % 10;
-        _digits[3] =  v         % 10;
-    } else { // Duration — 3 digits
-        _numDigits = 3;
-        uint16_t v = spinProfile[_editStep].durationS;
-        _digits[0] = (v / 100) % 10;
-        _digits[1] = (v /  10) % 10;
-        _digits[2] =  v        % 10;
+    uint16_t v = getFieldValue(phase, field);
+
+    if (_fieldIsRPM) {
+        _numDigits  = 4;
+        _digits[0]  = (v / 1000) % 10;
+        _digits[1]  = (v /  100) % 10;
+        _digits[2]  = (v /   10) % 10;
+        _digits[3]  =  v         % 10;
+    } else {
+        _numDigits  = 3;
+        _digits[0]  = (v / 100) % 10;
+        _digits[1]  = (v /  10) % 10;
+        _digits[2]  =  v        % 10;
     }
 
     _oled->clear();
@@ -159,32 +209,39 @@ void SpinProfilePage::enterDigitEdit(int field) {
 }
 
 void SpinProfilePage::saveDigits() {
-    if (_editField == 0) {
-        spinProfile[_editStep].rpm =
-            _digits[0] * 1000 + _digits[1] * 100 + _digits[2] * 10 + _digits[3];
+    uint16_t val;
+    if (_fieldIsRPM) {
+        val = _digits[0]*1000 + _digits[1]*100 + _digits[2]*10 + _digits[3];
     } else {
-        spinProfile[_editStep].durationS =
-            _digits[0] * 100 + _digits[1] * 10 + _digits[2];
+        val = _digits[0]*100 + _digits[1]*10 + _digits[2];
     }
+    setFieldValue(_editPhase, _editField, val);
 }
 
 void SpinProfilePage::renderDigitEdit() {
+    // Header: "Idle Speed", "Idle Time", "Ramp Time", "Final Speed", "Final Time"
+    const char* phaseStr = phaseName(_editPhase);
+    const char* kindStr  = _fieldIsRPM ? "Speed" : "Time";
+
+    char headerLine[OLED_MAX_CHARS];
+    snprintf(headerLine, sizeof(headerLine), "%s %s", phaseStr, kindStr);
+    _oled->setText(0, headerLine);
+
     char valLine[11];
     char arrowLine[11];
-    int val, blinkPos;
+    int  val;
+    int  blinkPos;
 
-    if (_editField == 0) {
-        _oled->setText(0, "Edit RPM");
+    if (_fieldIsRPM) {
         snprintf(valLine, 11, "RPM:%d%d%d%d",
                  _digits[0], _digits[1], _digits[2], _digits[3]);
         val      = _digits[0]*1000 + _digits[1]*100 + _digits[2]*10 + _digits[3];
         blinkPos = _digitPos;
     } else {
-        _oled->setText(0, "Edit Dur");
-        snprintf(valLine, 11, "Dur:%d%d%ds",
+        snprintf(valLine, 11, "Sec:%d%d%d ",
                  _digits[0], _digits[1], _digits[2]);
         val      = _digits[0]*100 + _digits[1]*10 + _digits[2];
-        blinkPos = _digitPos + 1; // leading zero occupies position 0 on 4-digit display
+        blinkPos = _digitPos + 1; // leading zero at TM1637 position 0
     }
 
     memset(arrowLine, ' ', 10);

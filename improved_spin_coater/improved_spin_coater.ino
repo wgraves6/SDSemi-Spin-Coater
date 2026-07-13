@@ -132,9 +132,9 @@ void updateOledSpin(float rpm) {
   }
 
   oled.setText(0, "SPINNING");
-  oled.setText(1, "Step:%d/%d", spinRunner.currentStep() + 1, spinProfileCount);
-  oled.setText(2, "Left:%ds", spinRunner.stepRemainingS());
-  oled.setText(3, "Tgt:%d", spinProfile[spinRunner.currentStep()].rpm);
+  oled.setText(1, "%s", phaseName(spinRunner.currentPhase()));
+  oled.setText(2, "Left:%ds", spinRunner.phaseRemainingS());
+  oled.setText(3, "Tgt:%d", spinRunner.lastTargetRPM());
   oled.render();
 }
 
@@ -189,7 +189,7 @@ void loop() {
 
       } else if (gDoStartSpin) {
         gDoStartSpin = false;
-        if (spinProfileCount > 0) {
+        {
           blinker.clearBlink();
           spinRunner.start(motor1, rpmController);
           oled.clear();

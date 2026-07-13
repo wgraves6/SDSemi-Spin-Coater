@@ -3,28 +3,37 @@
 #include "XY160D.h"
 #include "RPMController.h"
 
-#define SPIN_PROFILE_MAX_STEPS 6
-
-struct SpinStep {
-    uint16_t rpm;       // target RPM (0–9999)
-    uint16_t durationS; // duration in seconds (0–999)
+// Fixed 3-phase spin profile
+struct SpinPhaseProfile {
+    uint16_t idleSpeed;   // RPM during idle
+    uint16_t idleTime;    // seconds
+    uint16_t rampTime;    // seconds to ramp from idle to final speed
+    uint16_t finalSpeed;  // RPM during final spin
+    uint16_t finalTime;   // seconds
 };
 
-extern SpinStep spinProfile[SPIN_PROFILE_MAX_STEPS];
-extern int      spinProfileCount;
+extern SpinPhaseProfile spinPhase;
+
+#define PHASE_IDLE  0
+#define PHASE_RAMP  1
+#define PHASE_FINAL 2
+#define PHASE_COUNT 3
+
+const char* phaseName(int phase);
 
 class SpinRunner {
 public:
     void start(XY160D& motor, RPMController& ctrl);
-
-    bool update(float rpm);  // returns false when finished
-    int  currentStep()    const;
-    int  stepRemainingS() const;
+    bool update(float rpm);   // returns false when finished
+    int  currentPhase()    const;
+    int  phaseRemainingS() const;
+    int  lastTargetRPM()   const;
 
 private:
-    bool           _running   = false;
-    int            _step      = 0;
-    unsigned long  _stepStart = 0;
-    XY160D*        _motor     = nullptr;
-    RPMController* _ctrl      = nullptr;
+    bool           _running     = false;
+    int            _phase       = 0;
+    unsigned long  _phaseStart  = 0;
+    int            _lastTarget  = 0;
+    XY160D*        _motor       = nullptr;
+    RPMController* _ctrl        = nullptr;
 };
