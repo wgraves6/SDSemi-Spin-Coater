@@ -71,6 +71,16 @@ struct MPU6050Data {
   float tempC;                   // deg C
 };
 
+// Vibration statistics finalized at the end of one sample window (see
+// updateVibration() below).
+struct MPU6050VibrationStats {
+  float rmsAccelG;    // RMS of the gravity-removed accel magnitude, in g
+  float peakAccelG;   // largest instantaneous gravity-removed magnitude, in g
+  float crestFactor;  // peakAccelG / rmsAccelG (0 if rmsAccelG is ~0)
+  float tempC;        // sensor temperature, sampled once per window
+  uint16_t sampleCount; // number of accel samples folded into this window
+};
+
 class MPU6050 {
   public:
     explicit MPU6050(uint8_t address = MPU6050_ADDRESS_AD0_LOW, TwoWire &wirePort = Wire);
@@ -112,6 +122,36 @@ class MPU6050 {
     // Puts the device into / wakes it from low-power sleep mode.
     void sleep(bool enable);
 
+    // --- Vibration sample window -----------------------------------------
+    // Averages `samples` accel readings to find the static gravity vector.
+    // Sensor must be held still, in its resting orientation, while this
+    // runs. Call once after begin()/calibrateGyro(), before the main loop.
+    void calibrateGravity(uint16_t samples = 500);
+
+    // Sets the polling rate and window length used by updateVibration().
+    // Call before beginVibrationWindow(); defaults are 5ms / 500ms if unset.
+    void setVibrationWindow(unsigned long sampleIntervalMs, unsigned long windowMs);
+
+    // Resets the sample window's timers/accumulators. Call once, right
+    // before the main loop starts calling updateVibration().
+    void beginVibrationWindow();
+
+    // Call every loop() iteration. Internally polls accel at the configured
+    // sample interval (non-blocking, based on millis()) and folds each
+    // reading into the current window's RMS/peak accumulators after
+    // subtracting the calibrated gravity vector. Once a full window has
+    // elapsed, finalizes the stats into `out`, resets the window, and
+    // returns true. Returns false on every other call.
+    bool updateVibration(MPU6050VibrationStats &out);
+
+    // Formats `value` as a fixed-point decimal string (e.g. "1.2300"),
+    // using only integer math/printf - no "%f", so it works regardless of
+    // whether the core's printf was built with float support. Useful when
+    // building a JSON/MQTT payload that must never render a whole-number
+    // float without a decimal point (which can cause a receiving system to
+    // infer an integer type from the first message).
+    static void formatFixed(float value, uint8_t decimals, char *buf, size_t bufSize);
+
   private:
     TwoWire *_wire;
     uint8_t _address;
@@ -119,6 +159,16 @@ class MPU6050 {
     mpu6050_gyro_range_t  _gyroRange;
 
     float _gyroOffsetX = 0, _gyroOffsetY = 0, _gyroOffsetZ = 0;
+
+    float _gravityX = 0, _gravityY = 0, _gravityZ = 0;
+
+    unsigned long _sampleIntervalMs = 5;
+    unsigned long _windowMs = 500;
+    unsigned long _lastSampleTime = 0;
+    unsigned long _windowStart = 0;
+    double _sumSquares = 0.0;
+    float _peakMag = 0.0f;
+    uint16_t _sampleCount = 0;
 
     float accelRangeToLSB(mpu6050_accel_range_t range);
     float gyroRangeToLSB(mpu6050_gyro_range_t range);

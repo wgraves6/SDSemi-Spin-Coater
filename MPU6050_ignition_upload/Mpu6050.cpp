@@ -4,6 +4,8 @@
 */
 
 #include "MPU6050.h"
+#include <math.h>
+#include <stdio.h>
 
 MPU6050::MPU6050(uint8_t address, TwoWire &wirePort) {
   _address = address;
@@ -200,6 +202,105 @@ void MPU6050::calibrateGyro(uint16_t samples) {
     _gyroOffsetX = sumX / validSamples;
     _gyroOffsetY = sumY / validSamples;
     _gyroOffsetZ = sumZ / validSamples;
+  }
+}
+
+void MPU6050::calibrateGravity(uint16_t samples) {
+  double sumX = 0, sumY = 0, sumZ = 0;
+  uint16_t validSamples = 0;
+
+  for (uint16_t i = 0; i < samples; i++) {
+    float x, y, z;
+    if (readAccel(x, y, z)) {
+      sumX += x;
+      sumY += y;
+      sumZ += z;
+      validSamples++;
+    }
+    delay(3);
+  }
+
+  if (validSamples > 0) {
+    _gravityX = sumX / validSamples;
+    _gravityY = sumY / validSamples;
+    _gravityZ = sumZ / validSamples;
+  }
+}
+
+void MPU6050::setVibrationWindow(unsigned long sampleIntervalMs, unsigned long windowMs) {
+  _sampleIntervalMs = sampleIntervalMs;
+  _windowMs = windowMs;
+}
+
+void MPU6050::beginVibrationWindow() {
+  unsigned long now = millis();
+  _lastSampleTime = now;
+  _windowStart = now;
+  _sumSquares = 0.0;
+  _peakMag = 0.0f;
+  _sampleCount = 0;
+}
+
+bool MPU6050::updateVibration(MPU6050VibrationStats &out) {
+  unsigned long now = millis();
+
+  if (now - _lastSampleTime >= _sampleIntervalMs) {
+    _lastSampleTime = now;
+
+    float ax, ay, az;
+    if (readAccel(ax, ay, az)) {
+      float dx = ax - _gravityX;
+      float dy = ay - _gravityY;
+      float dz = az - _gravityZ;
+      float mag = sqrt(dx * dx + dy * dy + dz * dz);
+
+      _sumSquares += (double)mag * (double)mag;
+      if (mag > _peakMag) {
+        _peakMag = mag;
+      }
+      _sampleCount++;
+    }
+  }
+
+  if (now - _windowStart >= _windowMs && _sampleCount > 0) {
+    out.rmsAccelG = sqrt(_sumSquares / _sampleCount);
+    out.peakAccelG = _peakMag;
+    out.crestFactor = (out.rmsAccelG > 1e-6f) ? (out.peakAccelG / out.rmsAccelG) : 0.0f;
+    out.sampleCount = _sampleCount;
+    readTemp(out.tempC);
+
+    _sumSquares = 0.0;
+    _peakMag = 0.0f;
+    _sampleCount = 0;
+    _windowStart = now;
+    return true;
+  }
+  return false;
+}
+
+void MPU6050::formatFixed(float value, uint8_t decimals, char *buf, size_t bufSize) {
+  if (isnan(value) || isinf(value)) {
+    value = 0.0f;
+  }
+
+  bool negative = (value < 0);
+  if (negative) {
+    value = -value;
+  }
+
+  long scale = 1;
+  for (uint8_t i = 0; i < decimals; i++) {
+    scale *= 10;
+  }
+
+  long scaled = (long)(value * (float)scale + 0.5f);
+  long intPart = scaled / scale;
+  long fracPart = scaled % scale;
+
+  if (negative && (intPart != 0 || fracPart != 0)) {
+    snprintf(buf, bufSize, "-%ld.%0*ld", intPart, (int)decimals, fracPart);
+  } else {
+    snprintf(buf, bufSize, "%ld.%0*ld", intPart, (int)decimals, fracPart);
   }
 }
 

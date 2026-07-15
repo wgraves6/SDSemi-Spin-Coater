@@ -1,14 +1,27 @@
 /*
   MPU6050_ignition_upload.ino
-  Reads the GY-521 (MPU-6050) over I2C and publishes the readings to Ignition
-  over Ethernet via MQTT, on an Arduino R4 WiFi + Arduino Ethernet Shield (W5500).
+  Reads the GY-521 (MPU-6050) over I2C, computes vibration statistics over a
+  rolling sample window, and publishes them to Ignition over Ethernet via
+  MQTT, on an Arduino R4 WiFi + Arduino Ethernet Shield (W5500).
 
   This sketch combines:
     - The MPU6050 driver from MPU6050_test/ (Mpu6050.h/.cpp, copied unmodified
       into this sketch folder since Arduino requires driver files to live
-      alongside the .ino that uses them).
+      alongside the .ino that uses them). Gravity calibration and the
+      RMS/peak/crest-factor sample-window logic live there too - this .ino
+      only wires the driver's output up to MQTT/Ignition.
     - The Ethernet/MQTT upload pattern from arduinoEthernet/arduinoEthernet.ino
       (config.h, copied unmodified for the same reason).
+
+  Vibration metrics (published once per sample window instead of raw
+  accel/gyro samples - see MPU6050VibrationStats in Mpu6050.h):
+    - rmsAccelG   : RMS of the acceleration magnitude after the static
+                    gravity vector (measured at startup, sensor held still)
+                    is subtracted out, in g.
+    - peakAccelG  : largest instantaneous magnitude seen in the window, in g.
+    - crestFactor : peakAccelG / rmsAccelG (unitless) - a spike-y, impulsive
+                    vibration reads a high crest factor; smooth/periodic
+                    vibration reads close to sqrt(2).
 
   Wiring:
     MPU6050 VCC -> 5V
@@ -41,14 +54,18 @@
 // publish to the same broker without colliding.
 const char mpuTopic[] = "arduino/mpu6050";
 
+// How often a vibration-stats window is finalized and published to Ignition.
+// Raise this to publish (and upload) less often; lower it to publish more
+// often. Accel is still sampled every SAMPLE_INTERVAL_MS regardless - only
+// the publish/upload cadence changes.
+const unsigned long SAMPLE_INTERVAL_MS = 5;     // how often accel is polled
+const unsigned long PUBLISH_INTERVAL_MS = 1000; // how often a window is uploaded (was 500ms)
+
 // AD0 pin tied to GND -> address 0x68 (default).
 MPU6050 imu(MPU6050_ADDRESS_AD0_LOW);
 
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
-
-unsigned long lastPublish = 0;
-const unsigned long publishInterval = 200; // ms
 
 void connectMqtt() {
   while (!mqttClient.connected()) {
@@ -62,6 +79,17 @@ void connectMqtt() {
       delay(5000);
     }
   }
+}
+
+// Writes `value` into `doc[key]` as raw JSON text with a fixed number of
+// decimal places, guaranteeing the payload always contains a decimal point
+// (e.g. "0.0000", never "0"). Without this, ArduinoJson can render a
+// whole-number float without a decimal point, and Ignition's MQTT/JSON
+// tag-creation will infer an Int tag instead of a Float tag from that first
+// payload - which then rejects or truncates every later fractional value.
+void addFloatField(JsonDocument &doc, const char *key, float value, uint8_t decimals, char *buf, size_t bufSize) {
+  MPU6050::formatFixed(value, decimals, buf, bufSize);
+  doc[key] = serialized(buf);
 }
 
 void setup() {
@@ -80,9 +108,17 @@ void setup() {
     }
   }
   Serial.println(F("MPU-6050 found and initialized."));
+
   Serial.println(F("Keep the sensor still for gyro calibration..."));
   imu.calibrateGyro(500);
-  Serial.println(F("Calibration complete."));
+  Serial.println(F("Gyro calibration complete."));
+
+  Serial.println(F("Keep the sensor still (in its resting orientation) for gravity calibration..."));
+  imu.calibrateGravity(500);
+  Serial.println(F("Gravity calibration complete."));
+
+  imu.setVibrationWindow(SAMPLE_INTERVAL_MS, PUBLISH_INTERVAL_MS);
+  imu.beginVibrationWindow();
 
   Ethernet.begin(mac, ip, gateway, gateway, subnet);
   delay(1000); // let the shield's link come up
@@ -100,7 +136,7 @@ void setup() {
 
   mqttClient.setServer(mqttBroker, mqttPort);
 
-  Serial.println(F("Setup complete. Publishing readings.\n"));
+  Serial.println(F("Setup complete. Publishing vibration stats.\n"));
 }
 
 void loop() {
@@ -109,31 +145,22 @@ void loop() {
   }
   mqttClient.loop();
 
-  unsigned long now = millis();
-  if (now - lastPublish >= publishInterval) {
-    lastPublish = now;
-
-    MPU6050Data data;
-    if (!imu.readAll(data)) {
-      Serial.println(F("Read failed - check I2C connection."));
-      return;
-    }
-
-    JsonDocument doc;
-    doc["accelX"] = data.accelX;
-    doc["accelY"] = data.accelY;
-    doc["accelZ"] = data.accelZ;
-    doc["gyroX"]  = data.gyroX;
-    doc["gyroY"]  = data.gyroY;
-    doc["gyroZ"]  = data.gyroZ;
-    doc["tempC"]  = data.tempC;
-
-    char payload[256];
-    serializeJson(doc, payload);
-
-    Serial.print("Publishing: ");
-    Serial.println(payload);
-    mqttClient.publish(mpuTopic, payload);
+  MPU6050VibrationStats stats;
+  if (!imu.updateVibration(stats)) {
+    return;
   }
-  delay(1000);
+
+  JsonDocument doc;
+  char rmsBuf[16], peakBuf[16], crestBuf[16], tempBuf[16];
+  addFloatField(doc, "rmsAccelG",   stats.rmsAccelG,   4, rmsBuf,   sizeof(rmsBuf));
+  addFloatField(doc, "peakAccelG",  stats.peakAccelG,  4, peakBuf,  sizeof(peakBuf));
+  addFloatField(doc, "crestFactor", stats.crestFactor, 4, crestBuf, sizeof(crestBuf));
+  doc["sampleCount"] = stats.sampleCount;
+
+  char payload[256];
+  serializeJson(doc, payload);
+
+  Serial.print("Publishing: ");
+  Serial.println(payload);
+  mqttClient.publish(mpuTopic, payload);
 }
