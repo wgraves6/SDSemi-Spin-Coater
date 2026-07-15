@@ -8,7 +8,7 @@ Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at 
 
 | Component | Part | Connection |
 |---|---|---|
-| MCU | Arduino Giga R1 | — |
+| MCU | Arduino Uno R4 | — |
 | Motor driver | XY160D | IN1=6, IN2=7, EN=5 |
 | Encoder | Modulino I2C knob | Wire1, addr 0x3A |
 | OLED | SSD1306 128×64 | Wire1, addr 0x3D |
@@ -205,14 +205,14 @@ Iterates through `spinProfile[]` steps sequentially.
 
 ## I2C Bus Map
 
-The Giga R1 exposes two I2C peripherals. Keep this in mind when adding sensors.
+The Uno R4 Wifi exposes two I2C peripherals. Keep this in mind when adding sensors.
 
 | Bus | Devices | Addresses |
 |---|---|---|
 | `Wire1` | Modulino Knob, SSD1306 OLED | 0x3A, 0x3D |
 | `Wire` (Wire0) | free | — |
 
-New sensors should use `Wire` to avoid conflicts. Pass `Wire` explicitly to the driver constructor (both the MPU6050 driver and most Adafruit drivers accept a `TwoWire&` argument).
+New sensors should use `Wire` to avoid conflicts. 
 
 ---
 
@@ -229,7 +229,6 @@ New sensors should use `Wire` to avoid conflicts. Pass `Wire` explicitly to the 
 | SDA/SCL (Wire1) | OLED + Knob | Qwiic header |
 | SDA/SCL (Wire) | free | standard I2C header |
 
-All other digital pins support interrupts on the Giga R1, so additional interrupt-driven sensors have plenty of options.
 
 ---
 
@@ -243,114 +242,3 @@ Follow this pattern to add any new operating mode (vibration monitor, data loggi
 4. Add a `case APP_X:` to the switch. Call `menu.resetToRoot()` when done.
 
 Never change `appState` directly inside a menu callback — the deferred flag pattern prevents re-entrant state changes.
-
----
-
-## Vibration Sensor Integration (MPU-6050)
-
-A working driver exists in `../MPU6050_test/Mpu6050.h` + `Mpu6050.cpp`. Copy those two files into `improved_spin_coater/`.
-
-**Wiring (Giga R1):**
-- VCC → 5V, GND → GND
-- SCL/SDA → Wire (Wire0) header pins
-- AD0 → GND → address 0x68 (no conflict with Wire1 devices)
-
-**Initialization (add to `setup()`):**
-```cpp
-#include "Mpu6050.h"
-MPU6050 imu(MPU6050_ADDRESS_AD0_LOW, Wire);
-
-// after Wire.begin() (Wire0 does not need begin on Giga R1 core):
-if (!imu.begin(MPU6050_ACCEL_RANGE_2G, MPU6050_GYRO_RANGE_250DPS, MPU6050_DLPF_44HZ)) {
-    Serial.println("IMU not found");
-}
-imu.calibrateGyro(500); // hold still — takes ~1 s at default rate
-```
-
-**Vibration detection during spin (add inside `case APP_SPIN:`):**
-```cpp
-// Sample at ~20 Hz — I2C burst takes ~0.5 ms, don't call every loop tick
-static unsigned long lastImuRead = 0;
-if (millis() - lastImuRead >= 50) {
-    lastImuRead = millis();
-    MPU6050Data d;
-    if (imu.readAll(d)) {
-        // magnitude of vibration vector (subtract 1g gravity on whichever axis is vertical)
-        float vib = sqrt(d.accelX*d.accelX + d.accelY*d.accelY + d.accelZ*d.accelZ) - 1.0f;
-        if (vib > VIBRATION_THRESHOLD_G) {
-            // abort spin, show fault
-            motor1.Brake();
-            appState = APP_MENU;
-            menu.resetToRoot();
-        }
-    }
-}
-```
-
-A threshold of ~0.5–1.0 g is a reasonable starting point for imbalance detection. The gyro data (`d.gyroX/Y/Z` in deg/s) can also flag resonance if the sensor is mounted on the coater body.
-
-**Why DLPF_44HZ:** Cuts high-frequency mechanical noise while keeping bandwidth above the spin frequency (max ~67 Hz at 4000 RPM). If resonance frequencies are higher, use DLPF_94HZ.
-
----
-
-## MQTT Integration
-
-A working Ethernet + MQTT test sketch is in `../arduinoEthernet/`. It uses:
-- **Ethernet shield:** W5500 chip (SPI) via the `Ethernet` library (or `Ethernet2` if the shield uses W5100 — see comment in that sketch)
-- **PubSubClient** by Nick O'Leary — MQTT client
-- **ArduinoJson** by Benoit Blanchon — JSON payload builder
-
-Network config (static IP, broker address, credentials) is in `../arduinoEthernet/config.h`:
-- Arduino IP: `192.168.2.11`
-- Broker: `192.168.2.10:1883`
-- Credentials: user `will`, password `password`
-- Client ID: `arduinoR4WiFi`
-
-**Adapting for the spin coater:**
-
-Add to `improved_spin_coater.ino`:
-```cpp
-#include <Ethernet.h>
-#include <PubSubClient.h>
-#include <ArduinoJson.h>
-// (copy config.h from arduinoEthernet/ or hardcode here)
-
-EthernetClient ethClient;
-PubSubClient   mqttClient(ethClient);
-```
-
-In `setup()` after hardware init:
-```cpp
-Ethernet.begin(mac, ip, gateway, gateway, subnet);
-mqttClient.setServer(mqttBroker, mqttPort);
-```
-
-**Non-blocking reconnect** — the test sketch's `connectMqtt()` has a blocking `while` + `delay(5000)` loop that will freeze the spin. Replace it with:
-```cpp
-void mqttReconnectNonBlocking() {
-    static unsigned long lastAttempt = 0;
-    if (millis() - lastAttempt < 5000) return;
-    lastAttempt = millis();
-    mqttClient.connect(mqttClientId, mqttUser, mqttPassword);
-}
-```
-
-Call at the top of `loop()`:
-```cpp
-if (!mqttClient.connected()) mqttReconnectNonBlocking();
-mqttClient.loop(); // must be called every loop — non-blocking keep-alive
-```
-
-**Suggested spin coater topics:**
-
-| Direction | Topic | Payload |
-|---|---|---|
-| Publish | `spincoater/rpm` | `{"rpm": 3950, "target": 4000}` |
-| Publish | `spincoater/status` | `{"state": "spinning", "phase": "Final", "remaining": 42}` |
-| Publish | `spincoater/profile` | `{"idleSpeed":500,"idleTime":10,"rampTime":10,"finalSpeed":4000,"finalTime":60}` |
-| Subscribe | `spincoater/cmd` | `"start"` / `"stop"` |
-
-Publish at ~500 ms interval inside `case APP_SPIN:` using the same `static unsigned long lastPublish` pattern as the test sketch. Set a `mqttClient.setCallback()` handler in `setup()` to receive commands and set the relevant deferred flags (`gDoStartSpin`, etc.).
-
-**SPI pin conflict check:** The W5500 shield uses the Giga R1's SPI bus (MOSI, MISO, SCK) and a chip-select pin. Verify those pins don't overlap with any additions before wiring.
-
