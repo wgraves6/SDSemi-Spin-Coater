@@ -160,9 +160,9 @@ After all steps, prints the full map to Serial in copy-pasteable C array format.
 
 ```
 Calibrate    <- header (9 chars)
-[###   ]     <- 6-segment progress bar (8 chars)
-45%          <- same progress, as a number
+45%          <- sweep progress (MotorCalibrator_progress())
 RPM:2312     <- live measured RPM at the current PWM step
+PWM:185      <- PWM value currently being tested (MotorCalibrator_currentPWM())
 ```
 
 ---

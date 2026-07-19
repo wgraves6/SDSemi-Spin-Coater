@@ -85,6 +85,10 @@ int MotorCalibrator_progress() {
   return (mapIndex * 100) / totalSteps;
 }
 
+int MotorCalibrator_currentPWM() {
+  return currentPWM;
+}
+
 unsigned long MotorCalibrator_elapsedS() {
   if (_state == CAL_IDLE) return 0;
   return (millis() - runStartTime) / 1000UL;

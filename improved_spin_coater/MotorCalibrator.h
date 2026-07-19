@@ -11,6 +11,7 @@ void MotorCalibrator_start();
 void MotorCalibrator_update(float measuredRPM);
 bool MotorCalibrator_isRunning();
 int  MotorCalibrator_progress();
+int  MotorCalibrator_currentPWM();
 unsigned long MotorCalibrator_elapsedS();
 
 #endif

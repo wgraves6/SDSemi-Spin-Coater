@@ -275,22 +275,10 @@ void updateOledSpin(float rpm) {
 }
 
 void updateOledCal(float rpm) {
-  int pct = MotorCalibrator_progress();
-
-  // 6-segment bar + 2 brackets = 8 chars, comfortably inside the 10-char
-  // line budget. ("CALIBRATING" at 11 chars and "Please wait" at 11 chars
-  // used to silently lose their last letter to that same truncation.)
-  char bar[9];
-  int filled = constrain(pct * 6 / 100, 0, 6);
-  bar[0] = '[';
-  for (int i = 0; i < 6; i++) bar[1 + i] = (i < filled) ? '#' : ' ';
-  bar[7] = ']';
-  bar[8] = '\0';
-
   oled.setText(0, "Calibrate");
-  oled.setText(1, "%s", bar);
-  oled.setText(2, "%d%%", pct);
-  oled.setText(3, "RPM:%d", (int)rpm);
+  oled.setText(1, "%d%%", MotorCalibrator_progress());
+  oled.setText(2, "RPM:%d", (int)rpm);
+  oled.setText(3, "PWM:%d", MotorCalibrator_currentPWM());
   oled.render();
 }
 
