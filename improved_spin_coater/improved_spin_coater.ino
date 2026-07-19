@@ -10,10 +10,13 @@
 #include "RPMController.h"
 #include "MotorMap.h"
 #include "MotorCalibrator.h"
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include "config.h"
 
 // ---- Defines ----
 #define CLK 9
-#define DIO 10
+#define DIO 8
 #define KNOB_ADDR 0x3A
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -85,12 +88,49 @@ const MenuItem rootMenu[] = {
 };
 
 // ================================================================
+// MQTT
+// ================================================================
+
+EthernetClient ethClient;
+PubSubClient mqttClient(ethClient);
+
+void connectMqtt() {
+  while (!mqttClient.connected()) {
+    Serial.print("Connecting to MQTT broker...");
+    if (mqttClient.connect(mqttClientId, mqttUser, mqttPassword)) {
+      Serial.println("connected.");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" retrying in 5 seconds.");
+      delay(5000);
+    }
+  }
+}
+
+// ================================================================
 // SETUP
 // ================================================================
 
 void setup() {
   Serial.begin(9600);
+
+  Ethernet.begin(mac, ip, gateway, gateway, subnet);
+
   delay(1000);
+
+  if (Ethernet.hardwareStatus() == EthernetNoHardware) {
+    Serial.println("Ethernet shield not found. Check wiring/SPI connection.");
+    return;
+  }
+  if (Ethernet.linkStatus() == LinkOFF) {
+    Serial.println("Ethernet cable not connected.");
+  }
+
+  Serial.print("Arduino IP address: ");
+  Serial.println(Ethernet.localIP());
+
+  mqttClient.setServer(mqttBroker, mqttPort);
 
   Wire1.begin();
   knob.begin(Wire1, KNOB_ADDR);
@@ -166,6 +206,32 @@ void loop() {
   prevKnobValue = knob.value();
   bool rosePressed = knob.pressed() && !prevPressed;
   prevPressed = knob.pressed();
+
+    if (!mqttClient.connected()) {
+    connectMqtt();
+  }
+  mqttClient.loop();
+
+  static unsigned long lastPublish = 0;
+  static int counter = 1;
+  unsigned long now = millis();
+  if (now - lastPublish >= 5000) {
+    lastPublish = now;
+
+    JsonDocument doc;
+    doc["message"] = "Dad was here.";
+    doc["message2"] = "William was also here.";
+    doc["count"] = counter;
+
+    char payload[128];
+    serializeJson(doc, payload);
+
+    Serial.print("Publishing: ");
+    Serial.println(payload);
+    mqttClient.publish(mqttTopic, payload);
+
+    counter = (counter % 10) + 1;
+  }
 
   // Drive blinker animation at 50 ms intervals
   {

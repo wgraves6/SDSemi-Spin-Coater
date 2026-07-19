@@ -225,7 +225,7 @@ New sensors should use `Wire` to avoid conflicts.
 | 6 | XY160D IN1 | direction |
 | 7 | XY160D IN2 | direction |
 | 9 | TM1637 CLK | bit-banged |
-| 10 | TM1637 DIO | bit-banged |
+| 8 | TM1637 DIO | bit-banged |
 | SDA/SCL (Wire1) | OLED + Knob | Qwiic header |
 | SDA/SCL (Wire) | free | standard I2C header |
 
