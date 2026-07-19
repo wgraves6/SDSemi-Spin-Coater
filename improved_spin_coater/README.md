@@ -1,6 +1,6 @@
 # SDSemi Spin Coater Controller
 
-Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at closed-loop RPM targets defined by a user-editable multi-step spin profile, with an OLED menu UI driven by a rotary encoder and a TM1637 7-segment display for numeric readout.
+Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at closed-loop RPM targets defined by a user-editable multi-step spin profile, with an OLED menu UI driven by a rotary encoder.
 
 ---
 
@@ -12,7 +12,6 @@ Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at 
 | Motor driver | XY160D | IN1=6, IN2=7, EN=5 |
 | Encoder | Modulino I2C knob | Wire1, addr 0x3A |
 | OLED | SSD1306 128×64 | Wire1, addr 0x3D |
-| 7-segment | TM1637 4-digit | CLK=9, DIO=10 |
 | RPM sensor | Hall effect (1 magnet/rev) | pin 2 (interrupt) |
 | Vibration sensor | GY-521 (MPU-6050) | Wire (default I2C), addr 0x68 (AD0→GND) |
 
@@ -24,7 +23,6 @@ Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at 
 |---|---|
 | `improved_spin_coater.ino` | Main sketch, app state machine, hardware init, loop |
 | `OLEDLineDisplay` | SSD1306 line/list display driver with dirty tracking |
-| `TM1637BlinkerDigit` | TM1637 driver with per-digit blinking |
 | `ModulinoKnob` | I2C rotary encoder — cumulative value + button state |
 | `MenuUI` | Hierarchical menu with navigation stack |
 | `SpinProfilePage` | Digit-by-digit spin profile editor (3-state FSM) |
@@ -83,12 +81,19 @@ Calibrate   →  [confirm submenu]  →  Confirm  (→ APP_CALIBRATE)
 - Text is stored as `char[32]` — no heap allocation.
 - `updateOledSpin()` in the main sketch throttles its own calls to `render()` to once per 150 ms, on top of the dirty-line check above — during `PHASE_RAMP` the displayed target RPM changes every control tick, which would otherwise trigger a full-buffer flush almost continuously and was the main visible source of UI lag during a ramp.
 
-### 7-Segment Display (TM1637BlinkerDigit)
-- `setNumber(int)` decomposes into 4 BCD digits and calls `showDigits()` immediately.
-- `startBlink(index, delayMs)` enables blinking for one digit by index (0=leftmost).
-- `clearBlink()` stops all blinking and refreshes the display.
-- `update()` is called every 50 ms from the main loop. It toggles any blinking digits whose timer has elapsed and calls `showDigits()` only when a state actually changed (no-op on quiet loops).
-- During spin: shows live RPM. During calibration: shows completion %. During digit edit: shows current value with the active digit blinking.
+### Spin Screen Layout (`updateOledSpin`)
+The OLED is 128px wide, 4 lines tall (64px / 4 = 16px/line), which makes `OLEDLineDisplay`'s constructor auto-select text size 2x (16px glyphs — the largest size that still fits the line height exactly). **At that size `setText()` caps every line at `128 / (6*2) = 10` characters** — anything longer is silently truncated, so labels have to stay short:
+
+```
+Ph:Final     <- current phase (Idle / Ramp / Final)
+Left:42s     <- seconds remaining in the current phase
+Tgt:4000     <- target RPM for the current phase
+Act:3987     <- measured RPM (Hall sensor)
+```
+
+All four lines fit the 10-char budget with room to spare even at 4-digit RPM values. This replaced the previous 3-line layout (which had a static "SPINNING" header line and relied on a TM1637 7-segment display, since removed, to show live RPM) — actual RPM now has to live on the OLED since there's no other numeric readout.
+
+**The 10-char budget applies to list mode too, but isn't enforced there:** `setText()` (line mode) truncates via a fixed buffer, but `setList()`/`renderList()` (used by `MenuUI` and the phase-list/field-select screens below) just copies up to 31 characters with no width check — a string longer than ~10 chars simply runs off the physical right edge of the screen instead of being cut cleanly. Every label built by this codebase needs to be sized with that in mind; see the Spin Profile Editor section below for how the phase-list labels are kept within it at every possible entered value, not just typical ones.
 
 ---
 
@@ -104,7 +109,9 @@ DIGIT_EDIT   — cycle through digits one at a time with encoder
 
 **Digit editing:** digits are split into a `_digits[]` array. Encoder scroll increments/decrements the current digit (wraps 0–9). Each button press advances to the next digit. On the final digit, pressing saves back to `spinProfile[]` and returns to field select.
 
-**TM1637 integration:** during digit edit, `setNumber(val)` shows the current assembled value and `startBlink(pos)` blinks the active digit position. RPM uses positions 0–3 directly. Duration offset by +1 because the 4-digit display has a leading zero padding character at position 0.
+**Digit cursor:** `renderDigitEdit()` shows the assembled value on OLED line 1 (e.g. `RPM:4000` or `Sec:060`) and an arrow-cursor line below it (`    ^`, at column `4 + digitPos`) pointing at the digit currently being edited. This is the only indicator of edit position now — it used to be paired with a TM1637 digit blinking, since removed. The header line above it reads e.g. `"Final Spd"` — `"Speed"` is abbreviated to `"Spd"` specifically because `"Final Speed"` is 11 characters and would otherwise lose its last letter.
+
+**Phase-list and field-select labels are sized for the worst case, not the common one:** since list mode doesn't clip to the display width (see above), `enterPhaseList()` builds labels like `"I %u/%u"` / `"F %u/%u"` (e.g. `"I 500/10"`) instead of the more readable `"Idle:%u/%us"` used before — the old format hit 14 characters at typical values and was already running off-screen. The compact format stays within 10 characters even at the extreme end of what the digit editor allows (4-digit RPM, 3-digit seconds: `"I 9999/999"` is exactly 10). Same reasoning for `fieldLabel()`'s `"Speed:%u"` / `"Time:%us"` (tight spacing, no padding) in field-select.
 
 **Profile storage:** up to 6 `SpinStep` entries (`rpm: uint16`, `durationS: uint16`). Default is `{500 RPM, 30 s}` and `{4000 RPM, 60 s}`. Stored in a global array in RAM (not EEPROM — resets on power cycle unless save is added).
 
@@ -148,6 +155,15 @@ Sweeps PWM from 30 to 255 in steps of 5. At each step:
 3. Stores `{pwm, avgRPM}` into a temporary map array.
 
 After all steps, prints the full map to Serial in copy-pasteable C array format. `AUTO_SAVE_TO_EEPROM` is `false` by default — copy the Serial output into `defaultMap[]` in `MotorMap.cpp` to bake new calibration in.
+
+**OLED screen (`updateOledCal`):** same 10-char-per-line budget as the spin screen (see above) — the previous `"CALIBRATING"` (11 chars) and `"Please wait"` (11 chars) each silently lost their last letter to that cap. Replaced with:
+
+```
+Calibrate    <- header (9 chars)
+[###   ]     <- 6-segment progress bar (8 chars)
+45%          <- same progress, as a number
+RPM:2312     <- live measured RPM at the current PWM step
+```
 
 ---
 
@@ -262,10 +278,8 @@ Float fields are written via `addFloatField()` / `MPU6050::formatFixed()` as fix
 | 5 | XY160D EN (PWM) | analogWrite speed |
 | 6 | XY160D IN1 | direction |
 | 7 | XY160D IN2 | direction |
-| 9 | TM1637 CLK | bit-banged |
-| 8 | TM1637 DIO | bit-banged |
 | SDA/SCL (Wire1) | OLED + Knob | Qwiic header |
-| SDA/SCL (Wire) | free | standard I2C header |
+| SDA/SCL (Wire) | MPU-6050 | standard I2C header |
 
 
 ---

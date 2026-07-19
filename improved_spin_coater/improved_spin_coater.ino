@@ -1,6 +1,5 @@
 #include <Wire.h>
 #include "OLEDLineDisplay.h"
-#include "TM1637BlinkerDigit.h"
 #include "ModulinoKnob.h"
 #include "MenuUI.h"
 #include "SpinProfile.h"
@@ -16,8 +15,6 @@
 #include "config.h"
 
 // ---- Defines ----
-#define CLK 9
-#define DIO 8
 #define KNOB_ADDR 0x3A
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -25,7 +22,6 @@
 
 // ---- Hardware ----
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1, -1);
-TM1637BlinkerDigit blinker(CLK, DIO);
 OLEDLineDisplay oled(display, 4);
 ModulinoKnob knob;
 XY160D motor1(6, 7, 5);
@@ -243,9 +239,6 @@ void setup() {
       ;
   }
 
-  blinker.begin();
-  blinker.setNumber(0);
-
   oled.begin();
   menu.begin(oled, rootMenu, sizeof(rootMenu) / sizeof(rootMenu[0]));
 }
@@ -254,49 +247,50 @@ void setup() {
 // LOOP helpers
 // ================================================================
 
+// Display constraint: this is a 128px-wide OLED in 4-line mode, which makes
+// OLEDLineDisplay auto-select text size 2x (16px glyphs, filling the 64px
+// height exactly across 4 lines - see OLEDLineDisplay's constructor). At
+// that size, setText() caps each line at 128 / (6*2) = 10 characters -
+// anything longer is silently truncated. Keep labels within that budget.
 void updateOledSpin(float rpm) {
-  static unsigned long lastBlinker = 0;
-  unsigned long now = millis();
-  if (now - lastBlinker >= 100) {
-    lastBlinker = now;
-    blinker.setNumber((int)rpm);
-  }
-
   // During PHASE_RAMP, lastTargetRPM() changes by ~1 RPM every few ms, which
-  // would otherwise mark line 3 dirty almost every call. Adafruit_SSD1306's
+  // would otherwise mark a line dirty almost every call. Adafruit_SSD1306's
   // display() always flushes the *entire* 1KB framebuffer (no partial
   // update), so that turned into a near-constant full I2C transfer and was
   // the main source of visible lag during a ramp. Throttling the whole OLED
-  // refresh to a human-readable rate decouples it from how fast the target
-  // value is actually changing underneath.
+  // refresh to a human-readable rate decouples it from how fast the
+  // underlying values are actually changing.
   static unsigned long lastOledUpdate = 0;
+  unsigned long now = millis();
   if (now - lastOledUpdate < 150) {
     return;
   }
   lastOledUpdate = now;
 
-  oled.setText(0, "SPINNING");
-  oled.setText(1, "%s", phaseName(spinRunner.currentPhase()));
-  oled.setText(2, "Left:%ds", spinRunner.phaseRemainingS());
-  oled.setText(3, "Tgt:%d", spinRunner.lastTargetRPM());
+  oled.setText(0, "Ph:%s", phaseName(spinRunner.currentPhase()));
+  oled.setText(1, "Left:%ds", spinRunner.phaseRemainingS());
+  oled.setText(2, "Tgt:%d", spinRunner.lastTargetRPM());
+  oled.setText(3, "Act:%d", (int)rpm);
   oled.render();
 }
 
 void updateOledCal(float rpm) {
-  static unsigned long lastBlinker = 0;
-  unsigned long now = millis();
-  if (now - lastBlinker >= 100) {
-    lastBlinker = now;
-    blinker.setNumber((int)rpm);
-  }
-
   int pct = MotorCalibrator_progress();
-  oled.setText(0, "CALIBRATING");
-  oled.setText(1, "%d%%", pct);
-  oled.setText(2, "Please wait");
 
+  // 6-segment bar + 2 brackets = 8 chars, comfortably inside the 10-char
+  // line budget. ("CALIBRATING" at 11 chars and "Please wait" at 11 chars
+  // used to silently lose their last letter to that same truncation.)
+  char bar[9];
+  int filled = constrain(pct * 6 / 100, 0, 6);
+  bar[0] = '[';
+  for (int i = 0; i < 6; i++) bar[1 + i] = (i < filled) ? '#' : ' ';
+  bar[7] = ']';
+  bar[8] = '\0';
 
-  oled.setText(3, "");
+  oled.setText(0, "Calibrate");
+  oled.setText(1, "%s", bar);
+  oled.setText(2, "%d%%", pct);
+  oled.setText(3, "RPM:%d", (int)rpm);
   oled.render();
 }
 
@@ -315,16 +309,6 @@ void loop() {
 
   maintainMqtt();
 
-  // Drive blinker animation at 50 ms intervals
-  {
-    static unsigned long lastBlink = 0;
-    unsigned long now = millis();
-    if (now - lastBlink >= 50) {
-      lastBlink = now;
-      blinker.update();
-    }
-  }
-
   switch (appState) {
 
     case APP_MENU:
@@ -332,13 +316,12 @@ void loop() {
 
       if (gDoEditProfile) {
         gDoEditProfile = false;
-        profilePage.start(oled, blinker);
+        profilePage.start(oled);
         appState = APP_EDIT_PROFILE;
 
       } else if (gDoStartSpin) {
         gDoStartSpin = false;
         {
-          blinker.clearBlink();
           spinRunner.start(motor1, rpmController);
           imu.beginVibrationWindow();
           oled.clear();
@@ -347,7 +330,6 @@ void loop() {
 
       } else if (gDoCalibrate) {
         gDoCalibrate = false;
-        blinker.clearBlink();
         motor1.Brake();
         rpmController.reset();
         MotorCalibrator_start();
@@ -359,8 +341,6 @@ void loop() {
 
     case APP_EDIT_PROFILE:
       if (profilePage.update(delta, rosePressed)) {
-        blinker.clearBlink();
-        blinker.setNumber(0);
         appState = APP_MENU;
         menu.redraw();
       }
@@ -382,7 +362,6 @@ void loop() {
       }
 
       if (spinDone) {
-        blinker.setNumber(0);
         appState = APP_MENU;
         menu.resetToRoot();
       } else {
@@ -397,7 +376,6 @@ void loop() {
     case APP_CALIBRATE:
       MotorCalibrator_update(rpm);
       if (!MotorCalibrator_isRunning()) {
-        blinker.setNumber(0);
         appState = APP_MENU;
         menu.resetToRoot();
       } else {

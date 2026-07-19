@@ -1,12 +1,11 @@
 #pragma once
 #include <Arduino.h>
 #include "OLEDLineDisplay.h"
-#include "TM1637BlinkerDigit.h"
 #include "SpinProfile.h"
 
 class SpinProfilePage {
 public:
-    void start(OLEDLineDisplay& oled, TM1637BlinkerDigit& blinker);
+    void start(OLEDLineDisplay& oled);
 
     // Call every loop; returns true when done (return to menu)
     bool update(int delta, bool pressed);
@@ -15,7 +14,6 @@ private:
     enum State { PHASE_LIST, FIELD_SELECT, DIGIT_EDIT };
 
     OLEDLineDisplay*    _oled;
-    TM1637BlinkerDigit* _blinker;
     State _state;
 
     int _listSel;

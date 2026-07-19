@@ -44,19 +44,23 @@ void SpinProfilePage::setFieldValue(int phase, int field, uint16_t val) {
     }
 }
 
+// Labels here render in OLEDLineDisplay's line mode at the 128px/4-line
+// display's auto-selected text size (2x glyphs), which caps every line at
+// 10 characters (see improved_spin_coater.ino's updateOledSpin comment) -
+// anything longer is silently truncated. "Speed:%u" tops out at exactly 10
+// chars for a 4-digit RPM value; "Time:%us" at 9 for a 3-digit second value.
 void SpinProfilePage::fieldLabel(int phase, int field, char* buf, int bufLen) {
     if (fieldIsRPM(phase, field)) {
-        snprintf(buf, bufLen, "Speed: %u", (unsigned)getFieldValue(phase, field));
+        snprintf(buf, bufLen, "Speed:%u", (unsigned)getFieldValue(phase, field));
     } else {
-        snprintf(buf, bufLen, "Time:  %us", (unsigned)getFieldValue(phase, field));
+        snprintf(buf, bufLen, "Time:%us", (unsigned)getFieldValue(phase, field));
     }
 }
 
 // ----------------------------------------------------------------
 
-void SpinProfilePage::start(OLEDLineDisplay& oled, TM1637BlinkerDigit& blinker) {
+void SpinProfilePage::start(OLEDLineDisplay& oled) {
     _oled    = &oled;
-    _blinker = &blinker;
     _listSel = 0;
     _listOff = 0;
     enterPhaseList();
@@ -74,8 +78,6 @@ bool SpinProfilePage::update(int delta, bool pressed) {
             _digitPos++;
             if (_digitPos >= _numDigits) {
                 saveDigits();
-                _blinker->clearBlink();
-                _blinker->setNumber(0);
                 _listSel = _editField + 1; // return focus to edited field row
                 _listOff = 0;
                 enterFieldSelect(_editPhase);
@@ -133,18 +135,24 @@ void SpinProfilePage::enterPhaseList() {
 
     strncpy(_labels[_labelCount++], "< Done", OLED_MAX_CHARS - 1);
 
+    // List mode doesn't truncate to the display width the way setText()
+    // does (see fieldLabel() above) - text just runs off the physical
+    // 10-char-wide line if it's too long. "I %u/%u" / "F %u/%u" top out at
+    // exactly 10 chars even at worst case (4-digit RPM, 3-digit seconds:
+    // "I 9999/999"), so these fit no matter what values are entered.
+
     // Idle
     snprintf(_labels[_labelCount++], OLED_MAX_CHARS,
-             "Idle:%u/%us",
+             "I %u/%u",
              (unsigned)spinPhase.idleSpeed, (unsigned)spinPhase.idleTime);
 
     // Ramp
     snprintf(_labels[_labelCount++], OLED_MAX_CHARS,
-             "Ramp:%us", (unsigned)spinPhase.rampTime);
+             "R %u", (unsigned)spinPhase.rampTime);
 
     // Final
     snprintf(_labels[_labelCount++], OLED_MAX_CHARS,
-             "Final:%u/%us",
+             "F %u/%u",
              (unsigned)spinPhase.finalSpeed, (unsigned)spinPhase.finalTime);
 
     for (int i = 0; i < _labelCount; i++) {
@@ -219,9 +227,11 @@ void SpinProfilePage::saveDigits() {
 }
 
 void SpinProfilePage::renderDigitEdit() {
-    // Header: "Idle Speed", "Idle Time", "Ramp Time", "Final Speed", "Final Time"
+    // Header: "Idle Spd", "Idle Time", "Ramp Time", "Final Spd", "Final Time"
+    // "Speed" is abbreviated to "Spd" so "Final Speed" (11 chars) doesn't
+    // exceed this display's 10-char line budget (see fieldLabel() above).
     const char* phaseStr = phaseName(_editPhase);
-    const char* kindStr  = _fieldIsRPM ? "Speed" : "Time";
+    const char* kindStr  = _fieldIsRPM ? "Spd" : "Time";
 
     char headerLine[OLED_MAX_CHARS];
     snprintf(headerLine, sizeof(headerLine), "%s %s", phaseStr, kindStr);
@@ -229,19 +239,13 @@ void SpinProfilePage::renderDigitEdit() {
 
     char valLine[11];
     char arrowLine[11];
-    int  val;
-    int  blinkPos;
 
     if (_fieldIsRPM) {
         snprintf(valLine, 11, "RPM:%d%d%d%d",
                  _digits[0], _digits[1], _digits[2], _digits[3]);
-        val      = _digits[0]*1000 + _digits[1]*100 + _digits[2]*10 + _digits[3];
-        blinkPos = _digitPos;
     } else {
         snprintf(valLine, 11, "Sec:%d%d%d ",
                  _digits[0], _digits[1], _digits[2]);
-        val      = _digits[0]*100 + _digits[1]*10 + _digits[2];
-        blinkPos = _digitPos + 1; // leading zero at TM1637 position 0
     }
 
     memset(arrowLine, ' ', 10);
@@ -252,8 +256,4 @@ void SpinProfilePage::renderDigitEdit() {
     _oled->setText(2, arrowLine);
     _oled->setText(3, (_digitPos == _numDigits - 1) ? "Btn:save" : "Btn:next");
     _oled->render();
-
-    _blinker->setNumber(val);
-    _blinker->clearBlink();
-    _blinker->startBlink(blinkPos);
 }
