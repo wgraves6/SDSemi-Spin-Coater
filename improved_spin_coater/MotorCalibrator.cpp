@@ -19,6 +19,7 @@ static CalState _state = CAL_IDLE;
 
 static int currentPWM = PWM_START;
 static unsigned long stateStartTime = 0;
+static unsigned long runStartTime = 0;
 
 static float rpmAccum = 0;
 static int sampleCount = 0;
@@ -67,6 +68,7 @@ void MotorCalibrator_start() {
   mapIndex = 0;
 
   stateStartTime = millis();
+  runStartTime = stateStartTime;
   rpmAccum = 0;
   sampleCount = 0;
 
@@ -81,6 +83,11 @@ int MotorCalibrator_progress() {
   int totalSteps = (PWM_END - PWM_START) / PWM_STEP;
   if (totalSteps <= 0) return 0;
   return (mapIndex * 100) / totalSteps;
+}
+
+unsigned long MotorCalibrator_elapsedS() {
+  if (_state == CAL_IDLE) return 0;
+  return (millis() - runStartTime) / 1000UL;
 }
 
 void MotorCalibrator_update(float measuredRPM) {

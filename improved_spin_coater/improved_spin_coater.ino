@@ -36,7 +36,7 @@ RPMController rpmController;
 // the OLED + knob) at its default address (AD0 tied to GND).
 MPU6050 imu(MPU6050_ADDRESS_AD0_LOW);
 const unsigned long MPU_SAMPLE_INTERVAL_MS = 5;    // accel poll rate
-const unsigned long MPU_PUBLISH_INTERVAL_MS = 5000; // matches prior publish cadence
+const unsigned long MPU_PUBLISH_INTERVAL_MS = 1000; // telemetry publish cadence
 
 // ---- App state machine ----
 enum AppState { APP_MENU,
@@ -123,6 +123,37 @@ void connectMqtt() {
 void addFloatField(JsonDocument &doc, const char *key, float value, uint8_t decimals, char *buf, size_t bufSize) {
   MPU6050::formatFixed(value, decimals, buf, bufSize);
   doc[key] = serialized(buf);
+}
+
+// Publishes one telemetry payload (spin/calibrate profile metrics + vibration
+// stats) once per MPU_PUBLISH_INTERVAL_MS window. Only called while a spin
+// profile or calibration is actively running - `phase` distinguishes which
+// (spin phases from phaseName(), or "Calibrate").
+void publishTelemetry(const char *phase, float targetRPM, float actualRPM, unsigned long timeS) {
+  MPU6050VibrationStats vibStats;
+  if (!imu.updateVibration(vibStats)) {
+    return;
+  }
+
+  JsonDocument doc;
+  doc["phase"] = phase;
+  char targetBuf[16], actualBuf[16];
+  addFloatField(doc, "targetSpeed", targetRPM, 1, targetBuf, sizeof(targetBuf));
+  addFloatField(doc, "actualSpeed", actualRPM, 1, actualBuf, sizeof(actualBuf));
+  doc["time"] = timeS;
+
+  char rmsBuf[16], peakBuf[16], crestBuf[16];
+  addFloatField(doc, "rmsAccelG", vibStats.rmsAccelG, 4, rmsBuf, sizeof(rmsBuf));
+  addFloatField(doc, "peakAccelG", vibStats.peakAccelG, 4, peakBuf, sizeof(peakBuf));
+  addFloatField(doc, "crestFactor", vibStats.crestFactor, 4, crestBuf, sizeof(crestBuf));
+  doc["sampleCount"] = vibStats.sampleCount;
+
+  char payload[256];
+  serializeJson(doc, payload);
+
+  Serial.print("Publishing: ");
+  Serial.println(payload);
+  mqttClient.publish(mqttTopic, payload);
 }
 
 // ================================================================
@@ -243,27 +274,6 @@ void loop() {
   }
   mqttClient.loop();
 
-  // Polls the accel at MPU_SAMPLE_INTERVAL_MS and, once every
-  // MPU_PUBLISH_INTERVAL_MS worth of samples has been folded in, finalizes
-  // and publishes the vibration stats for that window.
-  MPU6050VibrationStats vibStats;
-  if (imu.updateVibration(vibStats)) {
-    JsonDocument doc;
-    char rmsBuf[16], peakBuf[16], crestBuf[16], tempBuf[16];
-    addFloatField(doc, "rmsAccelG", vibStats.rmsAccelG, 4, rmsBuf, sizeof(rmsBuf));
-    addFloatField(doc, "peakAccelG", vibStats.peakAccelG, 4, peakBuf, sizeof(peakBuf));
-    addFloatField(doc, "crestFactor", vibStats.crestFactor, 4, crestBuf, sizeof(crestBuf));
-    addFloatField(doc, "tempC", vibStats.tempC, 2, tempBuf, sizeof(tempBuf));
-    doc["sampleCount"] = vibStats.sampleCount;
-
-    char payload[256];
-    serializeJson(doc, payload);
-
-    Serial.print("Publishing: ");
-    Serial.println(payload);
-    mqttClient.publish(mqttTopic, payload);
-  }
-
   // Drive blinker animation at 50 ms intervals
   {
     static unsigned long lastBlink = 0;
@@ -289,6 +299,7 @@ void loop() {
         {
           blinker.clearBlink();
           spinRunner.start(motor1, rpmController);
+          imu.beginVibrationWindow();
           oled.clear();
           appState = APP_SPIN;
         }
@@ -299,6 +310,7 @@ void loop() {
         motor1.Brake();
         rpmController.reset();
         MotorCalibrator_start();
+        imu.beginVibrationWindow();
         oled.clear();
         appState = APP_CALIBRATE;
       }
@@ -320,6 +332,9 @@ void loop() {
         menu.resetToRoot();
       } else {
         updateOledSpin(rpm);
+        publishTelemetry(phaseName(spinRunner.currentPhase()),
+                          spinRunner.lastTargetRPM(), rpm,
+                          spinRunner.elapsedS());
       }
       break;
 
@@ -331,6 +346,7 @@ void loop() {
         menu.resetToRoot();
       } else {
         updateOledCal(rpm);
+        publishTelemetry("Calibrate", 0, rpm, MotorCalibrator_elapsedS());
       }
       break;
   }

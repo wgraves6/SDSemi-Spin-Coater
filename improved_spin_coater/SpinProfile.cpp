@@ -33,6 +33,7 @@ void SpinRunner::start(XY160D& motor, RPMController& ctrl) {
     _ctrl       = &ctrl;
     _phase      = PHASE_IDLE;
     _phaseStart = millis();
+    _runStart   = _phaseStart;
     _lastTarget = spinPhase.idleSpeed;
     _running    = true;
     _ctrl->reset();
@@ -90,4 +91,9 @@ int SpinRunner::phaseRemainingS() const {
     unsigned long totalMs   = (unsigned long)phaseDuration(_phase) * 1000UL;
     if (elapsedMs >= totalMs) return 0;
     return (int)((totalMs - elapsedMs) / 1000UL);
+}
+
+unsigned long SpinRunner::elapsedS() const {
+    if (!_running) return 0;
+    return (millis() - _runStart) / 1000UL;
 }

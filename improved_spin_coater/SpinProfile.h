@@ -28,11 +28,13 @@ public:
     int  currentPhase()    const;
     int  phaseRemainingS() const;
     int  lastTargetRPM()   const;
+    unsigned long elapsedS() const;
 
 private:
     bool           _running     = false;
     int            _phase       = 0;
     unsigned long  _phaseStart  = 0;
+    unsigned long  _runStart    = 0;
     int            _lastTarget  = 0;
     XY160D*        _motor       = nullptr;
     RPMController* _ctrl        = nullptr;
