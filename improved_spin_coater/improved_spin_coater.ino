@@ -36,7 +36,7 @@ const unsigned long SPIN_CONTROL_INTERVAL_MS = 20; // fixed PID tick rate (50 Hz
 // MPU6050 vibration monitor. Uses the default Wire bus (Wire1 is taken by
 // the OLED + knob) at its default address (AD0 tied to GND).
 MPU6050 imu(MPU6050_ADDRESS_AD0_LOW);
-const unsigned long MPU_SAMPLE_INTERVAL_MS = 5;    // accel poll rate
+const unsigned long MPU_SAMPLE_INTERVAL_MS = 20;   // accel poll rate
 const unsigned long MPU_PUBLISH_INTERVAL_MS = 1000; // telemetry publish cadence
 
 // ---- App state machine ----
