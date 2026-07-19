@@ -226,6 +226,8 @@ The `Mpu6050` driver (`Mpu6050.h`/`.cpp`) reads the GY-521 (MPU-6050) over `Wire
 
 **When it publishes:** telemetry is only sent while `APP_SPIN` or `APP_CALIBRATE` is active — not from the menu or profile editor. `imu.beginVibrationWindow()` is reset at the moment each of those states is entered (in the `gDoStartSpin`/`gDoCalibrate` handlers) so a stale window left over from menu idle time can't be flushed as a bogus first sample.
 
+**MQTT is never allowed to block the coater:** `maintainMqtt()` (called once per `loop()`) makes at most one `mqttClient.connect()` attempt per `MQTT_RETRY_INTERVAL_MS` (5 s) and always returns immediately, connected or not — it replaced an earlier version that looped with `delay(5000)` until the broker answered, which froze the knob, motor, and spin/calibrate state machine indefinitely if the broker was ever unreachable. `mqttClient.publish()` in `publishTelemetry()` is a no-op (returns `false`) when disconnected, so a down broker just means missed telemetry, not a stuck coater.
+
 **Loop:** `publishTelemetry()` is called once per iteration from inside the `APP_SPIN` and `APP_CALIBRATE` switch cases. It calls `imu.updateVibration(stats)`, which polls accel at the configured sample interval (non-blocking, `millis()`-based) and folds each reading — after subtracting the calibrated gravity vector — into the current window's RMS/peak accumulators. Once a full window elapses it finalizes the stats, resets the window, and returns `true`, at which point the payload is built and published:
 
 | Field | Meaning |

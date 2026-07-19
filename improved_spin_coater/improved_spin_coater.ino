@@ -101,17 +101,33 @@ const MenuItem rootMenu[] = {
 EthernetClient ethClient;
 PubSubClient mqttClient(ethClient);
 
-void connectMqtt() {
-  while (!mqttClient.connected()) {
-    Serial.print("Connecting to MQTT broker...");
-    if (mqttClient.connect(mqttClientId, mqttUser, mqttPassword)) {
-      Serial.println("connected.");
-    } else {
-      Serial.print("failed, rc=");
-      Serial.print(mqttClient.state());
-      Serial.println(" retrying in 5 seconds.");
-      delay(5000);
-    }
+// Non-blocking MQTT connect/keepalive. A broker that's down or unreachable
+// must never stall the rest of loop() - the motor, knob, and spin/calibrate
+// state machine all have to keep running with or without MQTT. So instead of
+// looping+delay()ing until connected, this makes at most one connect attempt
+// per MQTT_RETRY_INTERVAL_MS and always returns immediately either way.
+const unsigned long MQTT_RETRY_INTERVAL_MS = 5000;
+
+void maintainMqtt() {
+  if (mqttClient.connected()) {
+    mqttClient.loop();
+    return;
+  }
+
+  static unsigned long lastAttempt = 0;
+  unsigned long now = millis();
+  if (now - lastAttempt < MQTT_RETRY_INTERVAL_MS) {
+    return;
+  }
+  lastAttempt = now;
+
+  Serial.print("Connecting to MQTT broker...");
+  if (mqttClient.connect(mqttClientId, mqttUser, mqttPassword)) {
+    Serial.println("connected.");
+  } else {
+    Serial.print("failed, rc=");
+    Serial.print(mqttClient.state());
+    Serial.println(" will retry.");
   }
 }
 
@@ -269,10 +285,7 @@ void loop() {
   bool rosePressed = knob.pressed() && !prevPressed;
   prevPressed = knob.pressed();
 
-    if (!mqttClient.connected()) {
-    connectMqtt();
-  }
-  mqttClient.loop();
+  maintainMqtt();
 
   // Drive blinker animation at 50 ms intervals
   {
