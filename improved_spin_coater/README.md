@@ -79,8 +79,9 @@ Calibrate   →  [confirm submenu]  →  Confirm  (→ APP_CALIBRATE)
 ### OLED Line Rendering (OLEDLineDisplay — line mode)
 - Up to 4 lines (configurable at construction). Text size auto-selected to fit line height.
 - `setText(line, fmt, ...)` uses `vsnprintf` into a fixed char buffer. Marks the line dirty only if content changed (strcmp).
-- `render()` redraws only dirty lines, then calls `disp.display()` only if at least one line was redrawn.
+- `render()` redraws only dirty lines, then calls `disp.display()` only if at least one line was redrawn — but `display()` still flushes the *entire* framebuffer regardless of which lines changed (see I2C Bus Map above), so "only dirty lines" only reduces how often a redraw is *triggered*, not its cost once triggered.
 - Text is stored as `char[32]` — no heap allocation.
+- `updateOledSpin()` in the main sketch throttles its own calls to `render()` to once per 150 ms, on top of the dirty-line check above — during `PHASE_RAMP` the displayed target RPM changes every control tick, which would otherwise trigger a full-buffer flush almost continuously and was the main visible source of UI lag during a ramp.
 
 ### 7-Segment Display (TM1637BlinkerDigit)
 - `setNumber(int)` decomposes into 4 BCD digits and calls `showDigits()` immediately.
@@ -124,6 +125,8 @@ Algorithm per `update(targetRPM, measuredRPM)` call:
 9. **Asymmetric ramp:** output changes by at most +4 PWM/update (soft ramp up) and −12 PWM/update (fast ramp down).
 
 Tuned values (set in `setup()`): Kp=0.035, Ki=0.0010, Kd=0.08, rampRate=4, deadband=15.
+
+**Fixed control-loop cadence:** the integral and derivative terms above are computed per *call*, not per second — `_integral += error` and `derivative = error - _lastError` have no `dt` in them. That only means what the tuned gains assume if `update()` runs at a steady rate. Since `loop()`'s actual period varies with how much OLED/MQTT/I2C work happens around it, `APP_SPIN` in the main sketch pins `spinRunner.update()` (which calls into this controller) to a fixed tick — `SPIN_CONTROL_INTERVAL_MS` (20 ms / 50 Hz) — instead of calling it on every raw `loop()` pass. This keeps Ki/Kd behaving consistently regardless of display/network jitter. If you ever change `SPIN_CONTROL_INTERVAL_MS`, the tuned gains above will need re-tuning, since their real-world effect scales with how often `update()` actually runs.
 
 ---
 
@@ -216,6 +219,8 @@ The Uno R4 Wifi exposes two I2C peripherals. Keep this in mind when adding senso
 
 New sensors should use `Wire` to avoid conflicts.
 
+Both buses are set to Fast Mode (`setClock(400000)` in `setup()`, right after each `begin()`) instead of the default 100 kHz. This matters more than it sounds: `Adafruit_SSD1306::display()` always flushes the *entire* 1KB framebuffer over I2C (no partial update), so at 100 kHz a single redraw was ~90 ms — and if the OLED content changes often (e.g. every ~ms during a spin ramp, see below), that turns into a near-constant full-buffer transfer and reads as UI lag. Fast Mode alone cuts that to ~25 ms; throttling how often the OLED actually redraws (below) is the other half of the fix.
+
 ---
 
 ## Telemetry Upload (MPU6050 + Spin/Calibrate metrics -> MQTT)
@@ -227,6 +232,8 @@ The `Mpu6050` driver (`Mpu6050.h`/`.cpp`) reads the GY-521 (MPU-6050) over `Wire
 **When it publishes:** telemetry is only sent while `APP_SPIN` or `APP_CALIBRATE` is active — not from the menu or profile editor. `imu.beginVibrationWindow()` is reset at the moment each of those states is entered (in the `gDoStartSpin`/`gDoCalibrate` handlers) so a stale window left over from menu idle time can't be flushed as a bogus first sample.
 
 **MQTT is never allowed to block the coater:** `maintainMqtt()` (called once per `loop()`) makes at most one `mqttClient.connect()` attempt per `MQTT_RETRY_INTERVAL_MS` (5 s) and always returns immediately, connected or not — it replaced an earlier version that looped with `delay(5000)` until the broker answered, which froze the knob, motor, and spin/calibrate state machine indefinitely if the broker was ever unreachable. `mqttClient.publish()` in `publishTelemetry()` is a no-op (returns `false`) when disconnected, so a down broker just means missed telemetry, not a stuck coater.
+
+That connect attempt itself can still block, though: PubSubClient's default socket timeout is 15 s while it waits for a TCP handshake that's never coming, which read as a "huge lag spike" once per retry interval. `setup()` calls `mqttClient.setSocketTimeout(2)` to cap that at 2 s, and `maintainMqtt()` skips the attempt entirely (no blocking call at all) when `Ethernet.linkStatus() == LinkOFF` — the common case of the cable just being unplugged.
 
 **Loop:** `publishTelemetry()` is called once per iteration from inside the `APP_SPIN` and `APP_CALIBRATE` switch cases. It calls `imu.updateVibration(stats)`, which polls accel at the configured sample interval (non-blocking, `millis()`-based) and folds each reading — after subtracting the calibrated gravity vector — into the current window's RMS/peak accumulators. Once a full window elapses it finalizes the stats, resets the window, and returns `true`, at which point the payload is built and published:
 

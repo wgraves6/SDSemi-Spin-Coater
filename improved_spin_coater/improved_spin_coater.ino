@@ -31,6 +31,7 @@ ModulinoKnob knob;
 XY160D motor1(6, 7, 5);
 HallSensorRPM sensor(2, 4);
 RPMController rpmController;
+const unsigned long SPIN_CONTROL_INTERVAL_MS = 20; // fixed PID tick rate (50 Hz)
 
 // MPU6050 vibration monitor. Uses the default Wire bus (Wire1 is taken by
 // the OLED + knob) at its default address (AD0 tied to GND).
@@ -106,11 +107,22 @@ PubSubClient mqttClient(ethClient);
 // state machine all have to keep running with or without MQTT. So instead of
 // looping+delay()ing until connected, this makes at most one connect attempt
 // per MQTT_RETRY_INTERVAL_MS and always returns immediately either way.
+//
+// mqttClient.connect() itself can still block for the PubSubClient socket
+// timeout (defaults to 15s!) while it waits for a TCP handshake that's never
+// coming, which reads as a "huge lag spike" every retry interval. setup()
+// caps that via mqttClient.setSocketTimeout(2). The linkStatus() check below
+// additionally skips the attempt outright (no blocking call at all) when the
+// Ethernet cable is unplugged - the most common "not connected" case.
 const unsigned long MQTT_RETRY_INTERVAL_MS = 5000;
 
 void maintainMqtt() {
   if (mqttClient.connected()) {
     mqttClient.loop();
+    return;
+  }
+
+  if (Ethernet.linkStatus() == LinkOFF) {
     return;
   }
 
@@ -177,7 +189,7 @@ void publishTelemetry(const char *phase, float targetRPM, float actualRPM, unsig
 // ================================================================
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   Ethernet.begin(mac, ip, gateway, gateway, subnet);
 
@@ -195,8 +207,10 @@ void setup() {
   Serial.println(Ethernet.localIP());
 
   mqttClient.setServer(mqttBroker, mqttPort);
+  mqttClient.setSocketTimeout(2); // cap connect() blocking time; default is 15s
 
   Wire1.begin();
+  Wire1.setClock(400000); // Fast Mode - OLED full-buffer flushes are the UI's biggest stall
   knob.begin(Wire1, KNOB_ADDR);
 
   MotorMap_init();
@@ -215,6 +229,7 @@ void setup() {
     Serial.println("MPU6050 not found. Check wiring/address (SDA/SCL, power, AD0).");
   } else {
     Serial.println("MPU6050 found. Calibrating (keep the coater still)...");
+    Wire.setClock(400000); // Fast Mode
     imu.calibrateGyro(500);
     imu.calibrateGravity(500);
     imu.setVibrationWindow(MPU_SAMPLE_INTERVAL_MS, MPU_PUBLISH_INTERVAL_MS);
@@ -246,6 +261,19 @@ void updateOledSpin(float rpm) {
     lastBlinker = now;
     blinker.setNumber((int)rpm);
   }
+
+  // During PHASE_RAMP, lastTargetRPM() changes by ~1 RPM every few ms, which
+  // would otherwise mark line 3 dirty almost every call. Adafruit_SSD1306's
+  // display() always flushes the *entire* 1KB framebuffer (no partial
+  // update), so that turned into a near-constant full I2C transfer and was
+  // the main source of visible lag during a ramp. Throttling the whole OLED
+  // refresh to a human-readable rate decouples it from how fast the target
+  // value is actually changing underneath.
+  static unsigned long lastOledUpdate = 0;
+  if (now - lastOledUpdate < 150) {
+    return;
+  }
+  lastOledUpdate = now;
 
   oled.setText(0, "SPINNING");
   oled.setText(1, "%s", phaseName(spinRunner.currentPhase()));
@@ -338,8 +366,22 @@ void loop() {
       }
       break;
 
-    case APP_SPIN:
-      if (!spinRunner.update(rpm)) {
+    case APP_SPIN: {
+      // The PID's I/D terms are computed per-call, not per-second, so they
+      // only mean what their tuned gains assume if update() runs at a
+      // steady cadence. loop()'s actual period varies a lot (OLED/MQTT/I2C
+      // work), so pin the control update to a fixed tick instead of calling
+      // it on every raw pass - this keeps Ki/Kd behaving consistently
+      // regardless of how much display/network work happens around it.
+      static unsigned long lastCtrlTick = 0;
+      unsigned long nowMs = millis();
+      bool spinDone = false;
+      if (nowMs - lastCtrlTick >= SPIN_CONTROL_INTERVAL_MS) {
+        lastCtrlTick = nowMs;
+        spinDone = !spinRunner.update(rpm);
+      }
+
+      if (spinDone) {
         blinker.setNumber(0);
         appState = APP_MENU;
         menu.resetToRoot();
@@ -350,6 +392,7 @@ void loop() {
                           spinRunner.elapsedS());
       }
       break;
+    }
 
     case APP_CALIBRATE:
       MotorCalibrator_update(rpm);
