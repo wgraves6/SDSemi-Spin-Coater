@@ -10,6 +10,7 @@
 #include "RPMController.h"
 #include "MotorMap.h"
 #include "MotorCalibrator.h"
+#include "Mpu6050.h"
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "config.h"
@@ -30,6 +31,12 @@ ModulinoKnob knob;
 XY160D motor1(6, 7, 5);
 HallSensorRPM sensor(2, 4);
 RPMController rpmController;
+
+// MPU6050 vibration monitor. Uses the default Wire bus (Wire1 is taken by
+// the OLED + knob) at its default address (AD0 tied to GND).
+MPU6050 imu(MPU6050_ADDRESS_AD0_LOW);
+const unsigned long MPU_SAMPLE_INTERVAL_MS = 5;    // accel poll rate
+const unsigned long MPU_PUBLISH_INTERVAL_MS = 5000; // matches prior publish cadence
 
 // ---- App state machine ----
 enum AppState { APP_MENU,
@@ -108,6 +115,16 @@ void connectMqtt() {
   }
 }
 
+// Writes `value` into `doc[key]` as raw JSON text with a fixed number of
+// decimal places, guaranteeing the payload always contains a decimal point.
+// Without this, Ignition's MQTT/JSON tag-creation can infer an Int tag from
+// a whole-number float in the first payload, which then rejects/truncates
+// every later fractional value.
+void addFloatField(JsonDocument &doc, const char *key, float value, uint8_t decimals, char *buf, size_t bufSize) {
+  MPU6050::formatFixed(value, decimals, buf, bufSize);
+  doc[key] = serialized(buf);
+}
+
 // ================================================================
 // SETUP
 // ================================================================
@@ -145,6 +162,18 @@ void setup() {
   sensor.begin();
   motor1.Brake();
   MotorCalibrator_setPWMCallback(applyPWM);
+
+  Serial.println("Initializing MPU6050...");
+  if (!imu.begin(MPU6050_ACCEL_RANGE_2G, MPU6050_GYRO_RANGE_250DPS, MPU6050_DLPF_44HZ)) {
+    Serial.println("MPU6050 not found. Check wiring/address (SDA/SCL, power, AD0).");
+  } else {
+    Serial.println("MPU6050 found. Calibrating (keep the coater still)...");
+    imu.calibrateGyro(500);
+    imu.calibrateGravity(500);
+    imu.setVibrationWindow(MPU_SAMPLE_INTERVAL_MS, MPU_PUBLISH_INTERVAL_MS);
+    imu.beginVibrationWindow();
+    Serial.println("MPU6050 calibration complete.");
+  }
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
     Serial.println("OLED failed");
@@ -190,6 +219,8 @@ void updateOledCal(float rpm) {
   oled.setText(0, "CALIBRATING");
   oled.setText(1, "%d%%", pct);
   oled.setText(2, "Please wait");
+
+
   oled.setText(3, "");
   oled.render();
 }
@@ -212,25 +243,25 @@ void loop() {
   }
   mqttClient.loop();
 
-  static unsigned long lastPublish = 0;
-  static int counter = 1;
-  unsigned long now = millis();
-  if (now - lastPublish >= 5000) {
-    lastPublish = now;
-
+  // Polls the accel at MPU_SAMPLE_INTERVAL_MS and, once every
+  // MPU_PUBLISH_INTERVAL_MS worth of samples has been folded in, finalizes
+  // and publishes the vibration stats for that window.
+  MPU6050VibrationStats vibStats;
+  if (imu.updateVibration(vibStats)) {
     JsonDocument doc;
-    doc["message"] = "Dad was here.";
-    doc["message2"] = "William was also here.";
-    doc["count"] = counter;
+    char rmsBuf[16], peakBuf[16], crestBuf[16], tempBuf[16];
+    addFloatField(doc, "rmsAccelG", vibStats.rmsAccelG, 4, rmsBuf, sizeof(rmsBuf));
+    addFloatField(doc, "peakAccelG", vibStats.peakAccelG, 4, peakBuf, sizeof(peakBuf));
+    addFloatField(doc, "crestFactor", vibStats.crestFactor, 4, crestBuf, sizeof(crestBuf));
+    addFloatField(doc, "tempC", vibStats.tempC, 2, tempBuf, sizeof(tempBuf));
+    doc["sampleCount"] = vibStats.sampleCount;
 
-    char payload[128];
+    char payload[256];
     serializeJson(doc, payload);
 
     Serial.print("Publishing: ");
     Serial.println(payload);
     mqttClient.publish(mqttTopic, payload);
-
-    counter = (counter % 10) + 1;
   }
 
   // Drive blinker animation at 50 ms intervals

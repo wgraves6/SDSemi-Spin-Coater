@@ -14,6 +14,7 @@ Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at 
 | OLED | SSD1306 128×64 | Wire1, addr 0x3D |
 | 7-segment | TM1637 4-digit | CLK=9, DIO=10 |
 | RPM sensor | Hall effect (1 magnet/rev) | pin 2 (interrupt) |
+| Vibration sensor | GY-521 (MPU-6050) | Wire (default I2C), addr 0x68 (AD0→GND) |
 
 ---
 
@@ -33,6 +34,7 @@ Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at 
 | `XY160D` | DC motor driver (Forward / Backward / Brake) |
 | `MotorMap` | PWM→RPM lookup table, EEPROM-backed with hardcoded default |
 | `MotorCalibrator` | Sweeps PWM values and records average RPM at each step |
+| `Mpu6050` | MPU-6050 driver + rolling vibration-window RMS/peak/crest-factor stats |
 
 ---
 
@@ -210,9 +212,29 @@ The Uno R4 Wifi exposes two I2C peripherals. Keep this in mind when adding senso
 | Bus | Devices | Addresses |
 |---|---|---|
 | `Wire1` | Modulino Knob, SSD1306 OLED | 0x3A, 0x3D |
-| `Wire` (Wire0) | free | — |
+| `Wire` (Wire0) | MPU-6050 vibration sensor | 0x68 |
 
-New sensors should use `Wire` to avoid conflicts. 
+New sensors should use `Wire` to avoid conflicts.
+
+---
+
+## Vibration Monitoring (MPU6050 + MQTT)
+
+The `Mpu6050` driver (`Mpu6050.h`/`.cpp`) reads the GY-521 (MPU-6050) over `Wire` and republishes the Ethernet/MQTT link that was previously used to upload a placeholder counter to Ignition — the network/broker config in `config.h` is unchanged, only the payload is now real sensor data.
+
+**Setup:** `imu.begin()` wakes the sensor and applies range/DLPF settings, then `calibrateGyro(500)` and `calibrateGravity(500)` average 500 stationary samples each (~3 s total, blocking) to find the gyro zero-offset and the static gravity vector. Keep the coater still while these run. `setVibrationWindow()` configures the accel poll rate (`MPU_SAMPLE_INTERVAL_MS`, 5 ms) and the stats window length (`MPU_PUBLISH_INTERVAL_MS`, 5000 ms — matches the previous publish cadence).
+
+**Loop:** `imu.updateVibration(stats)` is called every iteration. Internally it polls accel at the configured sample interval (non-blocking, `millis()`-based) and folds each reading — after subtracting the calibrated gravity vector — into the current window's RMS/peak accumulators. Once a full window elapses it finalizes the stats, resets the window, and returns `true`, at which point the main loop publishes:
+
+| Field | Meaning |
+|---|---|
+| `rmsAccelG` | RMS of the gravity-removed acceleration magnitude, in g |
+| `peakAccelG` | Largest instantaneous gravity-removed magnitude seen in the window, in g |
+| `crestFactor` | `peakAccelG / rmsAccelG` — impulsive vibration reads high, smooth/periodic vibration reads near `sqrt(2)` |
+| `tempC` | Sensor temperature, sampled once per window |
+| `sampleCount` | Number of accel samples folded into the window |
+
+Float fields are written via `addFloatField()` / `MPU6050::formatFixed()` as fixed-decimal strings rather than raw floats, so the payload always contains a decimal point — otherwise Ignition's MQTT/JSON tag-creation can infer an Int tag from a whole-number float in the first message and reject or truncate every later fractional value.
 
 ---
 
