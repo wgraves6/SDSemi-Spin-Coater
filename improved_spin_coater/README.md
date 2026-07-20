@@ -30,7 +30,8 @@ Arduino firmware for the Semiconductor Club spin coater. Controls a DC motor at 
 | `RPMController` | PID + feedforward closed-loop RPM controller |
 | `HallSensorRPM` | Interrupt-driven RPM measurement from Hall sensor |
 | `XY160D` | DC motor driver (Forward / Backward / Brake) |
-| `MotorMap` | PWM→RPM lookup table, EEPROM-backed with hardcoded default |
+| `MotorMap` | PWM→RPM lookup table, SD-card-backed with hardcoded default |
+| `SdLogger` | Driver for the Ethernet shield's on-board SD slot (shared SPI bus with the W5100) |
 | `MotorCalibrator` | Sweeps PWM values and records average RPM at each step |
 | `Mpu6050` | MPU-6050 driver + rolling vibration-window RMS/peak/crest-factor stats |
 
@@ -154,7 +155,7 @@ Sweeps PWM from 30 to 255 in steps of 5. At each step:
 2. **SAMPLING (500 ms):** accumulates RPM readings, computes average.
 3. Stores `{pwm, avgRPM}` into a temporary map array.
 
-After all steps, prints the full map to Serial in copy-pasteable C array format. `AUTO_SAVE_TO_EEPROM` is `false` by default — copy the Serial output into `defaultMap[]` in `MotorMap.cpp` to bake new calibration in.
+After all steps, prints the full map to Serial in copy-pasteable C array format (for baking a new hardcoded `defaultMap[]` if you ever want to) and, exactly once — right after the sweep completes, never per-point and never on an aborted sweep — calls `MotorMap_setActive()` + `MotorMap_save()` to write the new map to `MOTORMAP.CSV` on the SD card. There is no separate opt-in flag; a finished calibration always overwrites the saved map.
 
 **OLED screen (`updateOledCal`):** same 10-char-per-line budget as the spin screen (see above) — the previous `"CALIBRATING"` (11 chars) and `"Please wait"` (11 chars) each silently lost their last letter to that cap. Replaced with:
 
@@ -169,18 +170,27 @@ PWM:185      <- PWM value currently being tested (MotorCalibrator_currentPWM())
 
 ## Motor Map (MotorMap)
 
-- 46-point default PWM→RPM table hardcoded in flash (`defaultMap[]` in `MotorMap.cpp`).
-- On `MotorMap_init()`: tries to load from EEPROM (magic word `0xBEEF` at address 0). Falls back to default if EEPROM is blank or corrupt.
-- `MotorMap_save()` writes header + all points to EEPROM starting at address 0.
-- `RPMController` uses this table for feedforward interpolation (smoothstep between points).
+- 46-point default PWM→RPM table hardcoded in flash (`defaultMap[]` in `MotorMap.cpp`) — used only as a fallback, see below.
+- On `MotorMap_init()`: tries to load `MOTORMAP.CSV` from the SD card via `SdLogger` (see below). Falls back to `defaultMap[]` if the card is missing/unformatted, the file doesn't exist, or it has no parseable lines.
+- `MotorMap_save()` rewrites `MOTORMAP.CSV` from the current in-RAM map (`SD.remove()` then re-append line by line — the SD library's `FILE_WRITE` only appends, so the old file has to be cleared first or a shorter new map would leave stale trailing points from a longer previous one).
+- `MotorMap_setActive(points, count)` replaces the in-RAM map (used by `MotorCalibrator` to install a finished sweep) — it does not touch the SD card itself, call `MotorMap_save()` after.
+- `RPMController` uses this table for feedforward interpolation (smoothstep between points). Loading a new SD-saved map only takes effect after the next `MotorMap_init()` (boot/reset) since `rpmController.begin()` is only called once in `setup()`.
 
-**EEPROM layout:**
+**SD card file format (`MOTORMAP.CSV`, in the root directory):** one `pwm,rpm` line per point, no header row, e.g.:
 ```
-[0x0000]  MotorMapHeader { uint16 magic=0xBEEF, uint16 count }
-[0x0004]  PWMRPMPoint[0]  { int pwm, float rpm }  (8 bytes each)
-[0x000C]  PWMRPMPoint[1]
+30,531.00
+35,924.00
 ...
 ```
+Filename is kept 8.3-safe (`MOTORMAP` = 8 chars, `.CSV` = 3) per the note in `SdLogger.h`.
+
+This replaced an earlier EEPROM-backed version (magic word `0xBEEF` + point array at address 0) — moved to SD once the Ethernet shield's SD slot was verified working (`ethernet_sd_test/`, a sibling project), mainly so a calibration run's results are a plain-text file you can pull off the card and inspect/edit directly, rather than opaque EEPROM bytes.
+
+---
+
+## SD Card (SdLogger)
+
+Thin driver around the Arduino SD library for the Ethernet shield's on-board SD slot (`SdLogger.h`/`.cpp`), currently used only by `MotorMap`. `begin()` drives both the SD and Ethernet (W5100) CS pins HIGH before calling `SD.begin()`, since the two chips share MOSI/MISO/SCK and leaving the other one un-deselected corrupts transfers silently — see the header comment in `SdLogger.h` for the full rationale. `appendLine()`/`printFile()` block for a few ms per call (card-dependent SD.open()/close() cost), so callers should keep them off any hot loop — `MotorMap` only calls into this during `MotorMap_init()` (once, at boot) and `MotorMap_save()` (once, right after a calibration sweep finishes), never during a spin.
 
 ---
 
@@ -275,9 +285,11 @@ Float fields are written via `addFloatField()` / `MPU6050::formatFixed()` as fix
 | Pin | Function | Notes |
 |---|---|---|
 | 2 | Hall sensor interrupt | falling edge, 500 µs debounce |
+| 4 | SD card CS | Ethernet shield's on-board SD slot, used by `MotorMap`/`SdLogger` |
 | 5 | XY160D EN (PWM) | analogWrite speed |
 | 6 | XY160D IN1 | direction |
 | 7 | XY160D IN2 | direction |
+| 10 | Ethernet (W5100) CS | shield default, used by `Ethernet.begin()` |
 | SDA/SCL (Wire1) | OLED + Knob | Qwiic header |
 | SDA/SCL (Wire) | MPU-6050 | standard I2C header |
 

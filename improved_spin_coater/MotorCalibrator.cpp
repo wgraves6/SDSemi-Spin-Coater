@@ -12,8 +12,6 @@ static const int PWM_STEP  = 5;
 static const int SETTLE_TIME_MS = 1500;
 static const int SAMPLE_TIME_MS = 500;
 
-static const bool AUTO_SAVE_TO_EEPROM = false;
-
 // ---- STATE ----
 static CalState _state = CAL_IDLE;
 
@@ -150,16 +148,11 @@ void MotorCalibrator_update(float measuredRPM) {
 
       printMap();
 
-      if (AUTO_SAVE_TO_EEPROM) {
-        PWMRPMPoint* map = MotorMap_get();
-
-        for (int i = 0; i < mapIndex; i++) {
-          map[i] = tempMap[i];
-        }
-
-        MotorMap_save();
-        Serial.println("Saved to EEPROM");
-      }
+      // Only write once, right here at the end of the sweep - never
+      // per-point, and never if the sweep is aborted (state can only
+      // reach CAL_DONE by finishing PWM_END).
+      MotorMap_setActive(tempMap, mapIndex);
+      MotorMap_save();
 
       if (_applyPWM) _applyPWM(0);
 
