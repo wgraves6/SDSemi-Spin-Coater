@@ -263,6 +263,8 @@ The `Mpu6050` driver (`Mpu6050.h`/`.cpp`) reads the GY-521 (MPU-6050) over `Wire
 
 That connect attempt itself can still block, though: PubSubClient's default socket timeout is 15 s while it waits for a TCP handshake that's never coming, which read as a "huge lag spike" once per retry interval. `setup()` calls `mqttClient.setSocketTimeout(2)` to cap that at 2 s, and `maintainMqtt()` skips the attempt entirely (no blocking call at all) when `Ethernet.linkStatus() == LinkOFF` — the common case of the cable just being unplugged.
 
+**Gives up after 30 s:** if Ignition hasn't answered within `MQTT_GIVE_UP_MS` (30 s) of the first `loop()` after boot, `maintainMqtt()` stops attempting reconnects for the rest of the session — a coater run shouldn't keep paying a connect attempt every `MQTT_RETRY_INTERVAL_MS` indefinitely just because the broker is down or unreachable that day. This only affects live telemetry; motor-map calibration data is SD-card-backed (see `MotorMap`) and has no MQTT dependency. There's no automatic re-arm — reconnecting requires a reset/reboot.
+
 **Loop:** `publishTelemetry()` is called once per iteration from inside the `APP_SPIN` and `APP_CALIBRATE` switch cases. It calls `imu.updateVibration(stats)`, which polls accel at the configured sample interval (non-blocking, `millis()`-based) and folds each reading — after subtracting the calibrated gravity vector — into the current window's RMS/peak accumulators. Once a full window elapses it finalizes the stats, resets the window, and returns `true`, at which point the payload is built and published:
 
 | Field | Meaning |

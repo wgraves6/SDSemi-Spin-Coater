@@ -112,9 +112,29 @@ PubSubClient mqttClient(ethClient);
 // Ethernet cable is unplugged - the most common "not connected" case.
 const unsigned long MQTT_RETRY_INTERVAL_MS = 5000;
 
+// If Ignition never answers within this long (from the first loop() after
+// boot), stop trying for the rest of the session - a coater run shouldn't
+// keep paying a connect attempt every 5s indefinitely just because the
+// broker happens to be down or unreachable that day. SD-side data (motor
+// map) doesn't depend on MQTT at all, so this only costs live telemetry.
+const unsigned long MQTT_GIVE_UP_MS = 30000;
+
 void maintainMqtt() {
+  static unsigned long firstAttemptTime = millis();
+  static bool gaveUp = false;
+
   if (mqttClient.connected()) {
     mqttClient.loop();
+    return;
+  }
+
+  if (gaveUp) {
+    return;
+  }
+
+  if (millis() - firstAttemptTime >= MQTT_GIVE_UP_MS) {
+    gaveUp = true;
+    Serial.println("MQTT: no broker connection within 30s, giving up for this session.");
     return;
   }
 
