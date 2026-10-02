@@ -30,7 +30,7 @@ const char mqttPassword[] = "password";
 // repeatedly kick each other off.
 const char mqttClientId[] = "arduinoR4WiFi";
 
-// Topic the Arduino publishes test messages to.
-const char mqttTopic[] = "arduino/test";
+// Topic the Arduino publishes messages to.
+const char mqttTopic[] = "arduino/spin coater";
 
 #endif
