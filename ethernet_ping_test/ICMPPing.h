@@ -7,6 +7,17 @@
  * published by the Free Software Foundation.
  */
 
+#ifndef ICMPPING_H
+#define ICMPPING_H
+
+/*
+ * Ported to Ethernet library 2.x (tested against 2.0.2) and the W5500.
+ * Ethernet 2.x made the old W5100 buffer helpers (send_data_processing,
+ * read_data, getRXReceivedSize) private, so ICMPPing.cpp now does its own
+ * TX/RX buffer access through the still-public W5100.read()/write().
+ * htons/ntohs/htonl/ntohl come from <utility/w5100.h>.
+ */
+
 #include <SPI.h>
 #include <Ethernet.h>
 #include <utility/w5100.h>
@@ -103,6 +114,9 @@ struct ICMPEcho
     void deserialize(byte const * binData);
 };
 
+// Serialized on-the-wire size: 8-byte ICMP header + 4-byte timestamp + payload.
+static_assert(sizeof(ICMPEcho) == 12 + REQ_DATASIZE, "ICMPEcho must have no padding");
+
 
 struct ICMPEchoReply
 {
@@ -135,7 +149,7 @@ public:
     @param id: The id to put in the ping packets. Can be pretty much any
     arbitrary number.
     */
-    ICMPPing(SOCKET s, uint8_t id);
+    ICMPPing(uint8_t socket, uint8_t id);
 
 
     /*
@@ -289,10 +303,10 @@ private:
 #endif
     uint8_t _id;
     uint8_t _nextSeq;
-    SOCKET _socket;
+    uint8_t _socket;
     uint8_t _attempt;
 
     uint8_t _payload[REQ_DATASIZE];
 };
 
-#pragma pack(1)
+#endif /* ICMPPING_H */

@@ -8,7 +8,6 @@
  */
 
 #include "ICMPPing.h"
-#include "util.h"
 
 #ifdef ICMPPING_INSERT_YIELDS
 #define ICMPPING_DOYIELD()		delay(2)
@@ -16,6 +15,65 @@
 #define ICMPPING_DOYIELD()
 #endif
 
+
+// Holds the Ethernet SPI settings for the lifetime of a scope. Ethernet 2.x's
+// W5100.read()/write() don't take the SPI transaction themselves (the library's
+// socket layer does), and the SD card shares this bus with different settings.
+struct EthernetSpiGuard
+{
+    EthernetSpiGuard()  { SPI.beginTransaction(SPI_ETHERNET_SETTINGS); }
+    ~EthernetSpiGuard() { SPI.endTransaction(); }
+};
+
+// Replacements for the TX/RX buffer helpers Ethernet 2.x made private
+// (mirrors write_data()/read_data()/getSnRX_RSR() in its socket.cpp).
+static void writeTxBuffer(uint8_t s, const uint8_t * data, uint16_t len)
+{
+    uint16_t ptr = W5100.readSnTX_WR(s);
+    uint16_t offset = ptr & W5100.SMASK;
+    uint16_t dstAddr = offset + W5100.SBASE(s);
+
+    if (W5100.hasOffsetAddressMapping() || offset + len <= W5100.SSIZE) {
+        W5100.write(dstAddr, data, len);
+    } else {
+        // wrap around the circular buffer (W5100 only; W5500 maps offsets itself)
+        uint16_t size = W5100.SSIZE - offset;
+        W5100.write(dstAddr, data, size);
+        W5100.write(W5100.SBASE(s), data + size, len - size);
+    }
+    W5100.writeSnTX_WR(s, ptr + len);
+}
+
+static void readRxBuffer(uint8_t s, uint16_t src, uint8_t * dst, uint16_t len)
+{
+    uint16_t offset = src & W5100.SMASK;
+    uint16_t srcAddr = W5100.RBASE(s) + offset;
+
+    if (W5100.hasOffsetAddressMapping() || offset + len <= W5100.SSIZE) {
+        W5100.read(srcAddr, dst, len);
+    } else {
+        uint16_t size = W5100.SSIZE - offset;
+        W5100.read(srcAddr, dst, size);
+        W5100.read(W5100.RBASE(s), dst + size, len - size);
+    }
+}
+
+static uint16_t rxReceivedSize(uint8_t s)
+{
+    // The register can change mid-read while a packet arrives; read until stable.
+    uint16_t prev = W5100.readSnRX_RSR(s);
+    for (;;) {
+        uint16_t val = W5100.readSnRX_RSR(s);
+        if (val == prev) return val;
+        prev = val;
+    }
+}
+
+// Big-endian field access by bytes - avoids unaligned/aliased pointer casts.
+static inline void put16(uint8_t * p, uint16_t v) { p[0] = v >> 8; p[1] = v; }
+static inline void put32(uint8_t * p, uint32_t v) { put16(p, v >> 16); put16(p + 2, v); }
+static inline uint16_t get16(const uint8_t * p) { return ((uint16_t)p[0] << 8) | p[1]; }
+static inline uint32_t get32(const uint8_t * p) { return ((uint32_t)get16(p) << 16) | get16(p + 2); }
 
 inline uint16_t _makeUint16(const uint8_t& highOrder, const uint8_t& lowOrder)
 {
@@ -53,7 +111,7 @@ uint16_t _checksum(const ICMPEcho& echo)
 }
 
 ICMPEcho::ICMPEcho(uint8_t type, uint16_t _id, uint16_t _seq, uint8_t * _payload)
-: seq(_seq), id(_id), time(millis())
+: id(_id), seq(_seq), time(millis())
 {
     memcpy(payload, _payload, REQ_DATASIZE);
     icmpHeader.type = type;
@@ -62,7 +120,7 @@ ICMPEcho::ICMPEcho(uint8_t type, uint16_t _id, uint16_t _seq, uint8_t * _payload
 }
 
 ICMPEcho::ICMPEcho()
-: seq(0), id(0), time(0)
+: id(0), seq(0), time(0)
 {
     memset(payload, 0, sizeof(payload));
     icmpHeader.code = 0;
@@ -75,10 +133,10 @@ void ICMPEcho::serialize(uint8_t * binData) const
     *(binData++) = icmpHeader.type;
     *(binData++) = icmpHeader.code;
 
-    *(uint16_t *)binData = htons(icmpHeader.checksum); binData += 2;
-    *(uint16_t *)binData = htons(id);                  binData += 2;
-    *(uint16_t *)binData = htons(seq);                 binData += 2;
-    *(icmp_time_t *)  binData = htonl(time);                binData += 4;
+    put16(binData, icmpHeader.checksum); binData += 2;
+    put16(binData, id);                  binData += 2;
+    put16(binData, seq);                 binData += 2;
+    put32(binData, time);                binData += 4;
 
     memcpy(binData, payload, sizeof(payload));
 }
@@ -88,13 +146,13 @@ void ICMPEcho::deserialize(uint8_t const * binData)
     icmpHeader.type = *(binData++);
     icmpHeader.code = *(binData++);
 
-    icmpHeader.checksum = ntohs(*(uint16_t *)binData); binData += 2;
-    id                  = ntohs(*(uint16_t *)binData); binData += 2;
-    seq                 = ntohs(*(uint16_t *)binData); binData += 2;
+    icmpHeader.checksum = get16(binData); binData += 2;
+    id                  = get16(binData); binData += 2;
+    seq                 = get16(binData); binData += 2;
 
     if (icmpHeader.type != TIME_EXCEEDED)
     {
-        time = ntohl(*(icmp_time_t *)binData);   binData += 4;
+        time = get32(binData); binData += 4;
     }
 
     memcpy(payload, binData, sizeof(payload));
@@ -103,7 +161,7 @@ void ICMPEcho::deserialize(uint8_t const * binData)
 
 uint16_t ICMPPing::ping_timeout = PING_TIMEOUT;
 
-ICMPPing::ICMPPing(SOCKET socket, uint8_t id) :
+ICMPPing::ICMPPing(uint8_t socket, uint8_t id) :
 #ifdef ICMPPING_ASYNCH_ENABLE
   _curSeq(0), _numRetries(0), _asyncstart(0), _asyncstatus(BAD_RESPONSE),
 #endif
@@ -120,8 +178,8 @@ void ICMPPing::setPayload(uint8_t * payload)
 
 void ICMPPing::openSocket()
 {
-
-	W5100.execCmdSn(_socket, Sock_CLOSE);
+    EthernetSpiGuard spi;
+    W5100.execCmdSn(_socket, Sock_CLOSE);
     W5100.writeSnIR(_socket, 0xFF);
     W5100.writeSnMR(_socket, SnMR::IPRAW);
     W5100.writeSnPROTO(_socket, IPPROTO::ICMP);
@@ -145,7 +203,6 @@ void ICMPPing::operator()(const IPAddress& addr, int nRetries, ICMPEchoReply& re
         result.status = sendEchoRequest(addr, echoReq);
         if (result.status == SUCCESS)
         {
-            byte replyAddr [4];
         	ICMPPING_DOYIELD();
             receiveEchoReply(echoReq, addr, result);
         }
@@ -154,7 +211,8 @@ void ICMPPing::operator()(const IPAddress& addr, int nRetries, ICMPEchoReply& re
             break;
         }
     }
-   
+
+    EthernetSpiGuard spi;
     W5100.execCmdSn(_socket, Sock_CLOSE);
     W5100.writeSnIR(_socket, 0xFF);
 }
@@ -172,6 +230,7 @@ Status ICMPPing::sendEchoRequest(const IPAddress& addr, const ICMPEcho& echoReq)
     // cast operator, we're forced to (1) cast away the constness, and (2) deal
     // with an endianness nightmare.
     uint8_t addri [] = {addr[0], addr[1], addr[2], addr[3]};
+    EthernetSpiGuard spi;
     W5100.writeSnDIPR(_socket, addri);
     W5100.writeSnTTL(_socket, 128);
     // The port isn't used, becuause ICMP is a network-layer protocol. So we
@@ -181,7 +240,7 @@ Status ICMPPing::sendEchoRequest(const IPAddress& addr, const ICMPEcho& echoReq)
     uint8_t serialized [sizeof(ICMPEcho)];
     echoReq.serialize(serialized);
 
-    W5100.send_data_processing(_socket, serialized, sizeof(ICMPEcho));
+    writeTxBuffer(_socket, serialized, sizeof(ICMPEcho));
     W5100.execCmdSn(_socket, Sock_SEND);
 
     while ((W5100.readSnIR(_socket) & SnIR::SEND_OK) != SnIR::SEND_OK) 
@@ -204,7 +263,8 @@ void ICMPPing::receiveEchoReply(const ICMPEcho& echoReq, const IPAddress& addr, 
     while (millis() - start < ping_timeout)
     {
 
-        if (W5100.getRXReceivedSize(_socket) < 1)
+        EthernetSpiGuard spi;
+        if (rxReceivedSize(_socket) < 1)
         {
         	// take a break, maybe let platform do
         	// some background work (like on ESP8266)
@@ -213,24 +273,26 @@ void ICMPPing::receiveEchoReply(const ICMPEcho& echoReq, const IPAddress& addr, 
         }
 
         // ah! we did receive something... check it out.
+        // IPRAW receive format: 4-byte source IP, 2-byte length, then the ICMP data.
 
         uint8_t ipHeader[6];
-		uint8_t buffer = W5100.readSnRX_RD(_socket);
-		W5100.read_data(_socket, (uint16_t) buffer, ipHeader, sizeof(ipHeader));
-		buffer += sizeof(ipHeader);
+		uint16_t ptr = W5100.readSnRX_RD(_socket);
+		readRxBuffer(_socket, ptr, ipHeader, sizeof(ipHeader));
+		ptr += sizeof(ipHeader);
 		for (int i = 0; i < 4; ++i)
 			echoReply.addr[i] = ipHeader[i];
-		uint8_t dataLen = ipHeader[4];
-		dataLen = (dataLen << 8) + ipHeader[5];
+		uint16_t dataLen = ((uint16_t)ipHeader[4] << 8) | ipHeader[5];
 
 		uint8_t serialized[sizeof(ICMPEcho)];
-		if (dataLen > sizeof(ICMPEcho))
-			dataLen = sizeof(ICMPEcho);
-		W5100.read_data(_socket, (uint16_t) buffer, serialized, dataLen);
+		memset(serialized, 0, sizeof(serialized));
+		uint16_t copyLen = dataLen < sizeof(ICMPEcho) ? dataLen : sizeof(ICMPEcho);
+		readRxBuffer(_socket, ptr, serialized, copyLen);
 		echoReply.data.deserialize(serialized);
 
-		buffer += dataLen;
-		W5100.writeSnRX_RD(_socket, buffer);
+		// skip the whole packet, even the part we didn't copy, so the next read
+		// starts on a packet boundary
+		ptr += dataLen;
+		W5100.writeSnRX_RD(_socket, ptr);
 		W5100.execCmdSn(_socket, Sock_RECV);
 
 		echoReply.ttl = W5100.readSnTTL(_socket);
@@ -334,7 +396,12 @@ bool ICMPPing::asyncComplete(ICMPEchoReply& result)
 	}
 
 
-	if (W5100.getRXReceivedSize(_socket))
+	uint16_t pending;
+	{
+		EthernetSpiGuard spi;
+		pending = rxReceivedSize(_socket);
+	}
+	if (pending)
 	{
 		// ooooh, we've got a pending reply
 	    ICMPEcho echoReq(ICMP_ECHOREQ, _id, _curSeq, _payload);
